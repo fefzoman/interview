@@ -80,20 +80,11 @@ Use bounded polling with a deadline. A fixed sleep can be too short on a slow ru
 
 A column can retain its name and integer type while changing from cents to whole dollars. A schema check passes, but the semantic contract breaks. A contract needs executable checks and an ownership/process agreement; a document alone does not enforce it.
 
-### Common data quality dimensions
+### Choose assertions from the data contract
 
-| Dimension | Example assertion | Important qualification |
-| --- | --- | --- |
-| Completeness | Required order IDs and amounts are present | Row completeness does not prove all source records arrived |
-| Uniqueness | One current row per `order_id` | History tables have a different grain |
-| Validity | Status belongs to the agreed set | A valid status can still be factually wrong |
-| Referential integrity | Each non-null customer key resolves | Late dimensions may require an agreed grace period |
-| Consistency | Detail totals match published aggregates | Compare equivalent populations and business rules |
-| Accuracy | Amount agrees with an authoritative business record | Internal consistency alone cannot establish truth |
-| Freshness | A required source position reaches the target within its objective | A recent ingestion timestamp can mask stale source data |
-| Volume/distribution | Counts and null rates stay within explained bounds | Seasonality and legitimate changes can trigger alerts |
+Use [data quality dimensions](data-quality.md#1-data-quality-dimensions) to choose the assertions and [freshness monitoring](data-quality.md#4-freshness-volume-schema-and-distribution-monitoring) to define progress. This guide owns how those assertions are exercised with fixtures, integration runs, replay, and failure injection.
 
-Separate event time, source commit time, ingestion time, and publication time. Choose a freshness measurement that answers the actual consumer requirement, and define how idle sources emit progress or heartbeats.
+Make fixtures reflect the declared grain: one current row per order differs from an order-history table. Include missing or late dimension records and idle-source progress, so tests cover agreed grace periods and heartbeat behavior.
 
 ### SQL checks should return violating rows
 
@@ -129,12 +120,7 @@ WHERE o.customer_id IS NOT NULL
 
 ### Schema evolution and consumer compatibility
 
-- **Backward compatibility:** a new reader can read data written with the old schema.
-- **Forward compatibility:** an old reader can read data written with the new schema.
-- **Full compatibility:** both directions hold.
-- **Transitive checks:** extend the chosen direction across earlier registered versions, rather than only the immediately preceding version.
-
-These definitions are useful for event contracts, but permitted changes depend on the serialization format and reader/writer rules. Adding a field is not automatically safe: required fields, defaults, strict readers, positional inserts, and downstream `SELECT *` can change the outcome. See [Confluent's schema compatibility documentation](https://docs.confluent.io/platform/current/schema-registry/fundamentals/schema-evolution.html).
+Use the reader/writer directions and format-specific examples in [contract compatibility](data-contracts.md#4-backward-forward--full-compatibility). Turn the supported combinations into fixtures using the [contract test matrix](data-contracts.md#8-contract-testing--consumer-driven-contracts).
 
 Test old fixtures with the new consumer and new fixtures with supported old consumers as required. Include semantic changes such as units, timezone interpretation, key meaning, and enum expansion. Keep historical schemas available for replay.
 

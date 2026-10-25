@@ -2,23 +2,22 @@
 
 Core engineering knowledge explains why a pipeline works, where it fails, and which trade-offs a design makes. In an interview, connect a definition to a concrete workload, a failure scenario, and an observable result.
 
-**Scope:** Platform-neutral fundamentals with selected database, streaming, storage, and Kubernetes examples. Product behavior depends on version and configuration; linked papers and official documentation support the implementation-specific details. Examples and sizing calculations illustrate reasoning rather than prescribe production settings.
+**Scope:** Distributed systems, cross-system transactions, storage and file systems, performance, networking, and production reliability. Product behavior depends on version and configuration; linked papers and official documentation support the implementation-specific details. Examples and sizing calculations illustrate reasoning rather than prescribe production settings.
 
 **Running example:** An online store writes orders to a transactional database. Change data capture publishes order changes to a broker. Processing jobs validate and enrich events, store analytical tables, and calculate revenue. The pipeline must handle duplicate events, late changes, worker failures, and growing traffic without counting an order twice.
+
+**Related foundations:** [Database engines and query planning](database.md), [SQL implementation and tuning](sql.md), [warehouse architecture and modeling](../storage-and-modeling/dwh.md), and [end-to-end platform design](../system-design/data-platform-system-design.md) have their own guides.
 
 ## Contents
 
 1. [Distributed Systems Fundamentals](#1-distributed-systems-fundamentals)
 2. [Distributed Data Processing](#2-distributed-data-processing)
-3. [Database Engine Internals](#3-database-engine-internals)
-4. [Database Transactions & Consistency](#4-database-transactions--consistency)
-5. [Data Storage & File Systems](#5-data-storage--file-systems)
-6. [Query Optimization](#6-query-optimization)
-7. [Performance Engineering](#7-performance-engineering)
-8. [Data Infrastructure & Architecture](#8-data-infrastructure--architecture)
-9. [Networking & Infrastructure](#9-networking--infrastructure)
-10. [Reliability & Production Engineering](#10-reliability--production-engineering)
-11. [Advanced Engineering Trade-offs](#11-advanced-engineering-trade-offs)
+3. [Distributed Transactions & Exactly-Once Effects](#3-distributed-transactions--exactly-once-effects)
+4. [Data Storage & File Systems](#4-data-storage--file-systems)
+5. [Performance Engineering](#5-performance-engineering)
+6. [Networking & Infrastructure](#6-networking--infrastructure)
+7. [Reliability & Production Engineering](#7-reliability--production-engineering)
+8. [Advanced Engineering Trade-offs](#8-advanced-engineering-trade-offs)
 
 ## 1. Distributed Systems Fundamentals
 
@@ -184,138 +183,9 @@ Frequent checkpoints reduce replay work but add overhead. Recovery time includes
 
 **Interview check:** A worker writes revenue, crashes before acknowledging the input, and receives it again. Explain exactly where deduplication and the revenue update become atomic.
 
-## 3. Database Engine Internals
+## 3. Distributed Transactions & Exactly-Once Effects
 
-### Storage engines: row-oriented vs. column-oriented
-
-A **storage engine** manages data representation, access paths, caching, and persistence. Its physical layout shapes which operations are cheap.
-
-| Layout | Strength | Cost |
-| --- | --- | --- |
-| Row-oriented | Fetching or changing most attributes of a few records | Analytical scans may read many unused attributes |
-| Column-oriented | Reading a few columns across many records; compression of similar values | Reconstructing individual rows and handling frequent small updates can require extra work |
-
-An order lookup by primary key often suits row storage. Summing two fields over a billion orders often suits column storage. Hybrid designs use write buffers, delta stores, indexes, and background merges. “Columnar” does not imply read-only, and row layout does not prevent analytical queries.
-
-### B-Trees, LSM-Trees, hash indexes
-
-**B-Trees**, commonly B+ trees in databases, keep ordered keys in a balanced page structure. High fan-out keeps the tree shallow; leaf ordering supports range scans. Inserts may split pages and require updates to multiple structures.
-
-**Log-structured merge trees (LSM-Trees)** buffer writes in memory and flush sorted immutable files to storage. A WAL commonly protects unflushed writes. Compaction merges files and discards versions only when retention and snapshot rules allow it. Reads may consult multiple files; Bloom filters can rule out many absent-key lookups. RocksDB uses memtables, log files, and sorted tables in this pattern. [RocksDB overview](https://github.com/facebook/rocksdb/wiki/RocksDB-Overview).
-
-**Hash indexes** map hashes to buckets and verify actual keys to handle collisions. They suit equality access but do not naturally support ordered ranges.
-
-The choice balances read, write, and space amplification. LSM does not mean every write is cheap forever: compaction consumes I/O and CPU and can cause stalls when it falls behind.
-
-### Pages, blocks, buffer pools, page cache
-
-A **page** is a database unit of storage and caching, often containing multiple records or index entries. A **block** may refer to a filesystem, device, compression, or distributed storage unit. These sizes and meanings differ; a large HDFS block is not a database page.
-
-A **buffer pool** caches database pages in process-managed memory. Reads pin pages while used; modifications mark pages dirty; eviction must respect recovery rules. The **OS page cache** caches filesystem data below the database. Depending on I/O mode, both caches may hold copies, or direct I/O may bypass the OS cache.
-
-A warm cache can hide slow storage. A high cache-hit ratio also does not prove a fast query: it may repeatedly read too many cached pages or spend most time waiting on locks. Track useful work, physical reads, eviction, and latency together.
-
-### WAL, checkpoints, crash recovery
-
-**Write-ahead logging (WAL)** requires a change's recovery log records to reach durable storage before the changed data pages are flushed. With durable commit settings, a transaction's required log records, including its commit record, are durable before success is acknowledged. Data pages can be flushed later; group commit can share a log flush across transactions. [PostgreSQL WAL introduction](https://www.postgresql.org/docs/18/wal-intro.html).
-
-A **checkpoint** establishes a recovery boundary and advances persistence according to the engine's protocol, limiting how far recovery must look back. It need not stop all activity or flush every dirty page instantaneously.
-
-**Crash recovery** uses logs and other recovery metadata to restore a consistent state. Engines may redo changes, undo incomplete work, or leave uncommitted versions invisible through MVCC. The precise algorithm varies.
-
-**Failure timeline:** Commit is durable, acknowledgment is lost, server restarts, and recovery retains the transaction. The client must resolve an unknown outcome; assuming every timed-out transaction rolled back can duplicate work.
-
-### Query parsing, planning, optimization, execution
-
-A typical query path is:
-
-1. **Parse:** Validate SQL syntax and form a parse tree.
-2. **Analyze and bind:** Resolve tables, columns, types, and access permissions.
-3. **Rewrite and form a logical plan:** Represent relations, filters, joins, and aggregates.
-4. **Optimize:** Choose transformations, access paths, join order, distribution, and physical operators.
-5. **Execute:** Run operators, obtain a valid transaction view, read data, and produce results.
-
-These stages can overlap or use cached plans. The optimizer searches alternatives within a time budget; it does not prove it found the globally fastest plan. Execution can introduce additional choices, such as adapting a join after observing runtime data.
-
-**Example:** SQL written with a join before a filter can execute as a filtered scan followed by a join. SQL expresses a result; its textual order is not a complete execution schedule.
-
-### Volcano iterator model, vectorized execution
-
-The classic **Volcano iterator model** composes operators through an interface such as `open`, `next`, and `close`. A parent repeatedly requests a tuple from its child. It supports streaming pipelines and early termination, but tuple-by-tuple dispatch can create interpretation and function-call overhead.
-
-**Vectorized execution** operates on batches of values. Tight loops amortize dispatch, improve cache use, and can enable SIMD instructions. Batch execution does not require materializing an entire table, and SIMD is an optimization rather than a synonym for vectorization. [MonetDB/X100 paper](https://ir.cwi.nl/pub/16497/16497B.pdf).
-
-Blocking operators, such as a full sort, still need enough input before producing results. Other engines compile pipelines into machine code; execution techniques can be combined. Columnar storage and vectorized execution complement each other but describe different layers.
-
-### MVCC, locks, transaction isolation
-
-**Multi-version concurrency control (MVCC)** retains versions and uses visibility rules so readers can see an appropriate snapshot while writers create newer versions. Old versions need cleanup once active readers and retention policies no longer require them. Long-running transactions can delay cleanup and increase storage use.
-
-**Locks** coordinate conflicting operations on rows, tables, ranges, or metadata. An MVCC engine can still use locks for writes and schema changes. Ordinary snapshot reads may avoid blocking writers, but that does not make every operation nonblocking.
-
-**Transaction isolation** defines which concurrent effects a transaction may observe. MVCC is an implementation technique, not an isolation level: an engine can use different snapshots or conflict checks to implement different guarantees.
-
-**Interview check:** Explain why a database can support nonblocking reads and still experience write deadlocks or storage growth from an old reader.
-
-## 4. Database Transactions & Consistency
-
-### ACID properties, isolation levels
-
-| Property | Meaning | Engineering implication |
-| --- | --- | --- |
-| Atomicity | The transaction's changes commit together or do not become committed effects | Avoid an order update without its corresponding ledger update inside the transaction boundary |
-| Consistency | Correct transactions preserve declared invariants | Constraints help; ACID does not discover missing business rules |
-| Isolation | Concurrent execution obeys the chosen isolation contract | Weaker levels permit some anomalies |
-| Durability | Acknowledged commits survive failures covered by the configuration | Asynchronous flushing or failover can weaken the practical guarantee |
-
-ACID consistency concerns application and database invariants. CAP consistency concerns the observed behavior of replicated operations; they are different uses of the word.
-
-The standard's minimum prohibitions are commonly summarized below. An engine may provide stronger behavior under a given level name.
-
-| Isolation level | Dirty read | Non-repeatable read | Phantom read | Serialization anomaly |
-| --- | --- | --- | --- | --- |
-| Read uncommitted | May occur | May occur | May occur | May occur |
-| Read committed | Prevented | May occur | May occur | May occur |
-| Repeatable read | Prevented | Prevented | May occur | May occur |
-| Serializable | Prevented | Prevented | Prevented | Prevented |
-
-For example, PostgreSQL 18 treats read uncommitted as read committed, and its repeatable read also prevents phantoms. Isolation names are not sufficient to infer every engine's behavior. [PostgreSQL isolation documentation](https://www.postgresql.org/docs/18/transaction-iso.html).
-
-### Dirty reads, non-repeatable reads, phantom reads
-
-- A **dirty read** observes another transaction's uncommitted change. A report sees an order that later rolls back.
-- A **non-repeatable read** sees a committed value change when rereading the same row. An order's amount is 100 on the first read and 120 on the second.
-- A **phantom read** sees a changed set of rows matching the same predicate. A second query for pending orders includes a newly committed order.
-
-These examples concern repeated reads in one transaction. A stable snapshot can prevent them while still permitting other anomalies, including write skew. A report issuing independent queries without a shared snapshot may combine totals from different database states.
-
-### Snapshot isolation, write skew, serializability
-
-**Snapshot isolation** gives a transaction a consistent snapshot and, in its usual definition, prevents concurrent transactions from both committing conflicting writes to the same item. It can still allow **write skew**, where transactions update different items after reading a shared condition.
-
-**Example:** At least one of two warehouse ingestion workers must stay enabled. Both transactions read that both workers are enabled. One disables worker A, the other disables worker B. Their write sets differ, yet the combined result violates the rule.
-
-**Serializability** requires the committed result to match some serial transaction order. Prevent write skew through serializable execution, correctly locking the relevant predicate, or forcing contenders to update a shared guard row with appropriate conflict handling.
-
-Serializability alone does not require that serial order to respect real-time completion. **Strict serializability** adds that requirement. Likewise, linearizable individual reads and writes do not automatically make a multi-operation transaction serializable.
-
-### Optimistic vs. pessimistic concurrency control
-
-**Optimistic concurrency control (OCC)** permits work, then validates that committing it will not violate the protocol. A version-based conditional update is a common application-level example: update only if `version = expected_version`, and detect whether a row changed. A stale writer must reread and retry or report a conflict.
-
-**Pessimistic concurrency control** reserves access with locks before proceeding. It can avoid wasted work under contention but introduces waiting, deadlocks, and possible long lock holds.
-
-OCC often suits relatively rare conflicts; locking can suit frequent conflicts where waiting is cheaper than redoing work. Neither is universally faster. Keep transactions short and avoid slow external calls while holding locks.
-
-**Example:** Two consumers try to update an order. Comparing a source version prevents an older update from silently overwriting the newer value; unconditional upsert does not provide that protection.
-
-### Deadlocks, conflict detection
-
-A **deadlock** is a cycle of waits: transaction A holds resource X and waits for Y, while B holds Y and waits for X. Engines may detect the cycle and abort a victim, or use timeout and prevention policies. A timeout alone does not prove a deadlock.
-
-Acquire resources in a consistent order, shorten transactions, and index predicates when that reduces the amount of locked work. Applications must still handle deadlock and serialization failures by retrying the complete transaction from a fresh view, within a bounded policy.
-
-**Conflict detection** can compare versions, overlapping write sets, or read/write dependencies. Some conflicts block, some abort, and some are allowed at weaker isolation. Retrying only the failed final statement can preserve earlier decisions based on invalid reads.
+For single-database ACID, MVCC, isolation anomalies, locking, and optimistic concurrency, use [Database engine internals](database.md#4-mvcc-transaction-isolation-and-locking). This section covers coordination across systems and atomic processing effects.
 
 ### Distributed transactions, 2PC, Saga
 
@@ -351,7 +221,7 @@ When writing a database and publishing an event, a **transactional outbox** stor
 
 **Interview check:** Identify the failure after every step: before commit, after commit but before acknowledgment, and during acknowledgment. State why recovery neither loses nor doubles the business effect.
 
-## 5. Data Storage & File Systems
+## 4. Data Storage & File Systems
 
 ### HDD vs. SSD, sequential vs. random I/O
 
@@ -419,69 +289,7 @@ Separate statistics used to choose a plan from metadata used to eliminate data s
 
 **Interview check:** For a lake with millions of small daily files, explain how compaction helps request and scheduling overhead, why it does not replace a good partition key, and when old files are safe to remove.
 
-## 6. Query Optimization
-
-### Logical vs. physical execution plans
-
-A **logical plan** states relational operations: filter orders, join customers, and aggregate revenue. A **physical plan** selects implementations: scan certain files, broadcast customers, build a hash table, exchange rows by region, and aggregate on workers.
-
-One logical result can have many physical plans. A fast plan reduces work early and places it well. Read a plan from its data sources through its consumers, identifying estimated or actual rows, scan volume, distribution exchanges, sorts, and materialization.
-
-`EXPLAIN` commonly shows a plan; execution-based variants such as `EXPLAIN ANALYZE` actually run the statement. They can consume resources or execute writes. Confirm engine behavior and use safe environments for mutating statements.
-
-### Rule-based vs. cost-based optimization
-
-**Rule-based optimization** applies valid transformations, such as simplifying expressions or pushing a filter below an inner join when safe. **Cost-based optimization (CBO)** compares alternatives using estimated row counts and costs for CPU, I/O, network, and memory.
-
-Modern optimizers commonly combine both. Costs are estimates, often relative units rather than milliseconds. A wrong estimate or a constrained search can select a poor plan; the optimizer does not exhaust every possibility for a large join graph. [PostgreSQL planner overview](https://www.postgresql.org/docs/18/planner-optimizer.html).
-
-Semantic restrictions matter. Pushing a predicate from an outer join's condition into a post-join filter can remove unmatched rows. A rewrite that saves time but changes results is not an optimization.
-
-### Cardinality estimation, table statistics
-
-**Cardinality** is the number of rows produced by an operator. **Selectivity** is the fraction retained by a predicate. If a million-row table has an estimated 1% selectivity, the optimizer expects 10,000 rows after filtering.
-
-Estimates use table statistics, sampled histograms, distinct counts, and sometimes multicolumn statistics. Stale data, correlated columns, skew, or opaque expressions cause errors. Treating country and city as independent, for example, misestimates many combinations.
-
-A serious underestimate can select a broadcast join that runs out of memory or a nested loop that performs millions of probes. Compare estimates with actual operator output to locate the first major divergence; downstream errors may follow from it. Refresh relevant statistics or improve the predicate before forcing a plan.
-
-### Predicate pushdown, projection pruning
-
-**Predicate pushdown** moves eligible filtering closer to storage or a remote source. A reader may skip whole regions using statistics or evaluate the predicate while decoding; those save different amounts of I/O.
-
-**Projection pruning** reads or carries only needed columns. It reduces columnar I/O, deserialization, row width, network traffic, and hash-table memory. A query selecting two fields should not carry a large unused payload through every shuffle.
-
-Pushdown depends on types, expressions, connector support, and semantics. A function around a partition field may inhibit pruning unless the optimizer can derive a usable range. Verify scan metrics and the physical plan rather than infer success from SQL appearance.
-
-### Join algorithms: nested loop, hash, sort-merge
-
-| Algorithm | Operation | Good fit | Main risk |
-| --- | --- | --- | --- |
-| Nested loop | For each outer row, find matching inner rows | Tiny outer input or selective indexed probes | Without a useful access path, work can approach `N × M` |
-| Hash join | Build a hash table on one side, probe with the other | Equijoins with a manageable build side | Memory pressure, skew, and partitioned spill |
-| Sort-merge join | Merge inputs ordered by compatible join keys | Large joins with useful existing ordering or external sorting | Sorting cost and many duplicates per key |
-
-Hash joins usually build on the smaller effective input after filters, not necessarily the table with fewer stored bytes. Sort-merge can spill gracefully but is not free of memory pressure. An output explosion from many-to-many keys affects every algorithm: no join strategy makes billions of required result rows disappear.
-
-### Join ordering, partition pruning
-
-**Join ordering** chooses which relations to combine first. Applying selective joins early can shrink intermediates substantially, but outer joins, dependencies, and other semantics constrain reordering. The smallest table is not always the best first join if it provides little filtering.
-
-**Partition pruning** removes storage partitions that cannot satisfy a predicate. **Dynamic partition pruning** can use values produced by another operator, such as filtered customer IDs, to avoid reading irrelevant partitions when supported.
-
-Pruning is distinct from distributing work across workers. A scan can run in parallel while reading every partition, or prune almost everything while using little parallelism. State both the amount of data avoided and the distribution of the remaining work.
-
-### Materialization, caching, result reuse
-
-**Materialization** stores an intermediate or derived result for later use. A materialized view can precompute daily revenue, exchanging refresh cost and staleness for cheaper queries. A temporary intermediate can avoid recomputing an expensive shared subplan, but adds writes and can block further optimization.
-
-**Caching** keeps data, plans, or complete results for reuse. These are different layers: cached files still require query execution; a result cache may bypass it. A common table expression is not a portable instruction to persist or cache its output.
-
-Reuse must respect source changes, parameters, permissions, and session semantics. A cache that serves another user's restricted result is a correctness and security defect. Measure warm and cold behavior separately.
-
-**Interview check:** A query joins a large fact table to a small dimension and spills. Check estimates, filters, build-side memory, distribution, and skew before requesting a larger cluster.
-
-## 7. Performance Engineering
+## 5. Performance Engineering
 
 ### Latency vs. throughput, percentiles (P95/P99)
 
@@ -565,75 +373,7 @@ Separate cold and warm caches, account for startup and autoscaling, and avoid re
 
 **Interview check:** If a job's runtime stays flat after doubling workers, distinguish insufficient parallel work, skew, shared I/O saturation, and serial work using specific metrics.
 
-## 8. Data Infrastructure & Architecture
-
-### OLTP vs. OLAP, HTAP
-
-**Online transaction processing (OLTP)** handles operational reads and writes, often a few records at a time, with predictable latency and transactional integrity. **Online analytical processing (OLAP)** scans, joins, and aggregates large datasets for analysis.
-
-**Hybrid transactional/analytical processing (HTAP)** supports both patterns within a coordinated system, sometimes through separate storage representations or replicas. It reduces extraction delay but still needs resource isolation and a defined freshness model between representations.
-
-**Example:** Placing an order is OLTP; calculating monthly revenue by region is OLAP. Running a full historical scan on the order database can delay checkout through shared CPU, cache, and I/O contention. Product categories are not absolute: analytical systems can support transactions, and operational databases can run SQL aggregates.
-
-### ETL vs. ELT, Lambda vs. Kappa architecture
-
-**ETL** extracts, transforms, then loads data into the target. It can enforce shape or remove sensitive fields before landing there. **ELT** extracts and loads first, then transforms using the target platform. It supports retaining raw inputs for reprocessing, with corresponding governance and storage obligations.
-
-**Lambda architecture** combines a batch layer for comprehensive historical computation with a speed layer for recent low-latency results. It requires reconciling their outputs and often maintaining two implementations of business logic.
-
-**Kappa architecture** centers processing on a durable event log and stream-processing path. Reprocessing replays history through a new or reset computation, subject to log retention, source completeness, and replay capacity. It does not remove the need for schemas, corrections, or historical state.
-
-Choose from freshness, replay requirements, complexity, and cost. Using streaming technology alone does not prove a system follows Kappa, nor does every pipeline need both paths.
-
-### Data Warehouse vs. Data Lake vs. Lakehouse
-
-| Architecture | Central idea | Strength | Responsibility or constraint |
-| --- | --- | --- | --- |
-| Data warehouse | Curated data managed for analytical querying | Integrated SQL, performance management, governed models | Loading, modeling, and platform economics |
-| Data lake | Store varied datasets in durable storage, often open files | Flexible formats and processing engines | Table semantics, discovery, governance, and quality require deliberate systems |
-| Lakehouse | Add managed table semantics and analytical capabilities over lake storage | Transactional tables and broader engine interoperability | Protocol compatibility, metadata operations, and maintenance |
-
-These labels overlap across products. Ask where the authoritative metadata lives, how concurrent writers commit, which engines support the protocol, and what happens after a failed write. Putting Parquet files in object storage is not sufficient to define a transactionally managed lakehouse.
-
-### CDC, event-driven architecture, message brokers
-
-**Change data capture (CDC)** records source inserts, updates, and deletes through mechanisms such as transaction-log reading or triggers. A log-based feed must handle source transaction order, an initial snapshot, its handoff to ongoing changes, schema evolution, and position retention.
-
-**Event-driven architecture** lets components react to published facts or commands without requiring one synchronous call chain. A **message broker** buffers and routes messages, decoupling producer and consumer lifetimes; delivery, retention, and ordering guarantees depend on the system and configuration.
-
-A row-change record is not automatically a business event. An update to a payment row may not express the business meaning of “payment settled.” An outbox can publish that meaning atomically with local state changes.
-
-**Example:** Carry the source key, operation, source position, and relevant version so consumers can apply deletes, reject stale updates, and recover from replay. A timestamp-only incremental query can miss deletes and changes sharing the boundary timestamp.
-
-### MPP vs. SMP, shared-nothing vs. shared-storage
-
-**Symmetric multiprocessing (SMP)** uses multiple processors sharing one system's memory. **Massively parallel processing (MPP)** distributes work across cooperating processing nodes, often with independent memory and inter-node exchanges.
-
-**Shared-nothing** nodes own their local resources and assigned data. It scales by partitioning, but skew and redistributing data become central. **Shared-storage** designs let multiple compute nodes access a common storage layer, simplifying some placement and elasticity concerns while relying on that layer's throughput and coordination.
-
-These are different axes. An MPP query engine can read shared object storage while using local memory, caches, and shuffle disks on each worker. “Shared storage” does not mean all compute can mutate the same files safely without a protocol.
-
-### Compute-storage separation
-
-**Compute-storage separation** lets durable data outlive an individual compute cluster. Compute pools can scale or stop independently and share a governed storage layer.
-
-Benefits include independent scaling, workload isolation, and less data movement when replacing compute. Costs include remote-read latency, network traffic, cache warmup, metadata dependencies, and potential storage bottlenecks.
-
-Separate compute does not eliminate shared contention: two clusters can overload the same object store, catalog, source system, or network budget. Local caches improve performance but require correct invalidation or immutable version references.
-
-**Example:** Use one compute pool for scheduled transformations and another for interactive dashboards, then measure whether concurrent scans overwhelm a common dependency.
-
-### Metadata catalogs, orchestration, lineage
-
-A **metadata catalog** maps names to schemas, locations, owners, permissions, and sometimes authoritative table versions. Some catalogs participate in commit coordination; others primarily support discovery. State which role is required.
-
-**Orchestration** schedules tasks, dependencies, retries, and backfills. A green task means its configured work completed, not necessarily that the data are fresh, complete, or correct. Publish outputs only after required validation succeeds.
-
-**Lineage** records how sources, transformations, and outputs relate. Table-level lineage helps assess downstream impact; column-level or run-level lineage can explain a particular field or materialization. Dynamic SQL and external side effects can make coverage incomplete.
-
-**Interview check:** For an incorrect revenue dashboard, trace the source version, processing run, transformation code, and published table snapshot. An orchestrator's success status alone cannot establish correctness.
-
-## 9. Networking & Infrastructure
+## 6. Networking & Infrastructure
 
 ### TCP/IP, DNS, HTTP, TLS
 
@@ -701,7 +441,7 @@ Use least-privilege workload identities, short-lived credentials where supported
 
 **Interview check:** A worker cannot read storage. Separate DNS and routing, connection and TLS, authentication, resource authorization, and encryption-key access instead of treating every error as “networking.”
 
-## 10. Reliability & Production Engineering
+## 7. Reliability & Production Engineering
 
 ### High availability, disaster recovery
 
@@ -772,7 +512,7 @@ Track **cost per successful unit of work**, such as cost per million validated e
 
 **Interview check:** A day of revenue is wrong although every task succeeded. Explain how to locate the affected input range, correct the computation, replay safely, reconcile the result, and publish without double counting.
 
-## 11. Advanced Engineering Trade-offs
+## 8. Advanced Engineering Trade-offs
 
 ### Consistency vs. latency vs. availability
 

@@ -542,30 +542,13 @@ Autoscale on signals that reflect the bottleneck: lag and input rate for ingesti
 
 ### Data contracts: make producer/consumer expectations explicit
 
-A data contract specifies the agreement around a dataset, including structure, meaning, quality, ownership, and service expectations. A schema is one part of that agreement. See the [Open Data Contract Standard](https://github.com/bitol-io/open-data-contract-standard).
-
-For an order-change dataset, define:
-
-| Contract area | Example requirement |
-| --- | --- |
-| Identity and grain | One record per order change; stable change identity and tenant-scoped order key |
-| Schema | Required fields, types, nullability, timestamp timezone, and encoding |
-| Semantics | Amount in integer minor units plus currency; distinguish capture from authorization |
-| Ordering | Source sequence determines which entity version is newer |
-| Deletes | Explicit operation and downstream deletion/tombstone behavior |
-| Delivery | Expected duplicates, source guarantees, and replay availability |
-| Service levels | Freshness, completeness checks, and correction horizon |
-| Ownership | Producer, support contact, escalation, and incident response |
-| Governance | Sensitivity, permitted uses, retention, and access policy |
-| Evolution | Compatibility checks, deprecation period, and migration process |
+Use [data contracts and schema management](../quality-and-governance/data-contracts.md) for the full contract structure and compatibility rules. In a design interview, put the concrete assumptions on the diagram: dataset grain, tenant-scoped keys, change identity, ordering, deletes, replay horizon, freshness target, owner, and permitted uses.
 
 Do not label the source “exactly once” without explaining the boundary. Similarly, “daily delivery” needs a timezone, deadline, completeness signal, and late-delivery policy.
 
 ### Schema and semantic evolution
 
-Backward compatibility means a new reader can read older data; forward compatibility means an older reader can read newer data. A compatibility mode may check only a previous version or all retained versions. Exact rules depend on the serialization format and configuration.
-
-An optional added field may be compatible while renaming a field, narrowing a type, or changing a unit can break consumers. Changing `amount` from dollars to cents can preserve the physical type while corrupting every downstream metric.
+Apply the [schema migration procedure](../quality-and-governance/data-contracts.md#5-schema-evolution-breaking-changes--versioning) to the complete path, including historical replay. In the design, identify which consumers move first, where both versions coexist, and how you verify that meanings and units remain consistent.
 
 Enforce contracts at both development and runtime boundaries:
 

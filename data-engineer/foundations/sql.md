@@ -586,45 +586,15 @@ If only customer eligibility matters, `EXISTS` avoids bringing order detail into
 
 ## 7. Transactions & Concurrency
 
-### ACID and MVCC
+### Transaction guarantees to recall
 
-| Property | Meaning | Practical boundary |
-| --- | --- | --- |
-| Atomicity | A transaction's database changes commit together or are rolled back | Does not automatically include an external API call or another independent system |
-| Consistency | Correct transactions preserve declared invariants | The database cannot infer an undeclared business rule |
-| Isolation | Concurrent work follows the selected isolation contract | Weaker levels permit some anomalies |
-| Durability | A committed result survives failures covered by the configured contract | Acknowledgment, log flush, replication, and disaster-recovery settings matter |
+The definitions of ACID, MVCC, isolation levels, anomalies, and locking live in [Database engine internals](database.md#4-mvcc-transaction-isolation-and-locking). Use this section to apply them in SQL: choose transaction boundaries, prevent stale writes, and handle concurrent updates.
 
-**Multi-version concurrency control (MVCC)** keeps versions so readers can see a consistent snapshot while writers create changes. Snapshot scope may be one statement or a transaction. MVCC reduces some reader/writer blocking; it does not remove write locks, conflicts, deadlocks, or cleanup work. Long-lived snapshots can retain old versions and increase storage pressure.
-
-### Isolation levels and anomalies
-
-| Anomaly | Example |
-| --- | --- |
-| Dirty read | Read a payment inserted by another transaction that later rolls back |
-| Non-repeatable read | Read one order twice and see a committed status change between reads |
-| Phantom read | Repeat a predicate query and see a new qualifying order |
-| Lost update | Two clients read amount 100, then write 110 and 120; the intended combined change is lost |
-| Write skew | Two transactions read the same invariant and update different rows, jointly violating it |
-
-The SQL isolation levels set minimum protections; implementations can be stronger:
-
-| Level | Standard minimum intuition |
-| --- | --- |
-| Read Uncommitted | Dirty reads may be possible |
-| Read Committed | No dirty reads; later statements may see newer commits |
-| Repeatable Read | Also prevents non-repeatable reads; the standard permits phantoms |
-| Serializable | Committed transactions behave like some serial ordering, preventing serialization anomalies |
-
-In PostgreSQL, Read Uncommitted behaves as Read Committed. Read Committed normally takes a new snapshot per statement. Repeatable Read uses a transaction snapshot and prevents phantom visibility as well, but still permits serialization anomalies such as write skew. Serializable can abort transactions that must be retried. These statements describe PostgreSQL, not every engine with similarly named levels. [Transaction isolation](https://www.postgresql.org/docs/18/transaction-iso.html).
-
-**Write-skew example:** Two on-call engineers each see that two people are available and independently mark their own row unavailable. The writes affect different rows, so snapshot isolation can allow both, leaving nobody on call. Protect the shared invariant with serializable execution and retries, an appropriate shared lock protocol, or a schema-level constraint where expressible. Locking only one's own row does not protect the other row's decision.
+Before writing a transaction, state the invariant and the snapshot it requires. A multi-row invariant needs protection across all relevant rows; locking only the row being updated can still allow write skew.
 
 ### Locks, deadlocks, and optimistic concurrency
 
-**Locks** coordinate access to rows, tables, or key/predicate ranges, depending on the engine and operation. Keep transactions short and acquire shared resources in a consistent order. An index can reduce rows examined and sometimes lock scope, but that behavior is implementation-specific.
-
-A **deadlock** is a cycle of waiting: transaction A holds row 1 and waits for row 2; B holds row 2 and waits for row 1. The engine typically aborts a victim. A lock timeout is not proof of a deadlock; there may simply be a long blocker. Inspect the wait graph and transaction age.
+When diagnosing blocked SQL, inspect the wait graph and transaction age. Keep transactions short and acquire shared resources in a consistent order. Indexes can affect the amount of locked work, but the behavior depends on the engine.
 
 **Optimistic concurrency** verifies that state has not changed since the client read it. Assume `documents(document_id, body, version)`:
 

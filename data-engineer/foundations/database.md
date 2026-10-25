@@ -139,6 +139,8 @@ Low-cardinality columns often produce compact bitmaps, but value distribution, c
 
 ### Choosing an access structure
 
+**Hash indexes** map hashes to buckets and verify actual keys to handle collisions. They suit equality access but do not naturally support ordered ranges.
+
 | Structure | Good fit | Main tradeoff |
 | --- | --- | --- |
 | B+ tree | Selective equality, ordered access, range lookups | Page maintenance and potentially scattered writes |
@@ -210,6 +212,17 @@ WAL supports recovery and can feed physical replication or logical decoding. A C
 
 ## 4. MVCC, Transaction Isolation, and Locking
 
+### ACID and transaction boundaries
+
+| Property | Meaning | Engineering implication |
+| --- | --- | --- |
+| Atomicity | The transaction's changes commit together or do not become committed effects | Avoid an order update without its corresponding ledger update inside the transaction boundary |
+| Consistency | Correct transactions preserve declared invariants | Constraints help; ACID does not discover missing business rules |
+| Isolation | Concurrent execution obeys the chosen isolation contract | Weaker levels permit some anomalies |
+| Durability | Acknowledged commits survive failures covered by the configuration | Asynchronous flushing or failover can weaken the practical guarantee |
+
+ACID consistency concerns application and database invariants. CAP consistency concerns the observed behavior of replicated operations; they are different uses of the word.
+
 ### MVCC and snapshots
 
 **Multiversion concurrency control (MVCC)** keeps enough version history to give each read an appropriate view of the data. The engine evaluates version visibility using a snapshot, transaction status, and version metadata. Old versions may live in table storage, undo records, or immutable files, depending on the design.
@@ -246,6 +259,18 @@ The anomalies to explain are:
 - **Write skew:** transactions read overlapping data but update different rows, jointly breaking an invariant.
 
 **Write-skew example:** A rule requires at least one active approver. Alice and Bob are both active. Two transactions each observe both active, then each deactivates a different person. Under snapshot isolation, both can commit because they changed different rows, leaving nobody active. Serializable execution can reject such a schedule; an alternative is to make all changes contend on a shared guard row under a correct locking protocol.
+
+Serializability alone does not require that serial order to respect real-time completion. **Strict serializability** adds that requirement. Likewise, linearizable individual reads and writes do not automatically make a multi-operation transaction serializable.
+
+### Optimistic vs. pessimistic concurrency control
+
+**Optimistic concurrency control (OCC)** permits work, then validates that committing it will not violate the protocol. A version-based conditional update is a common application-level example: update only if `version = expected_version`, and detect whether a row changed. A stale writer must reread and retry or report a conflict.
+
+**Pessimistic concurrency control** reserves access with locks before proceeding. It can avoid wasted work under contention but introduces waiting, deadlocks, and possible long lock holds.
+
+OCC often suits relatively rare conflicts; locking can suit frequent conflicts where waiting is cheaper than redoing work. Neither is universally faster. Keep transactions short and avoid slow external calls while holding locks.
+
+**Example:** Two consumers try to update an order. Comparing a source version prevents an older update from silently overwriting the newer value; unconditional upsert does not provide that protection.
 
 ### Locks, latches, and deadlocks
 

@@ -69,7 +69,7 @@ flowchart LR
 
 **Design lineage** records intended dependencies from definitions or parsed code. **Runtime lineage** records observed execution. Both help: declared dependencies show planned changes, while runtime observations show what a particular run accessed. Dynamic SQL, stored procedures, notebooks, external APIs, and manual exports can create gaps.
 
-OpenLineage models datasets, jobs, and job runs, with metadata extensions called facets. A job describes a transformation; a run is one execution. This distinction helps associate outputs with the actual execution and inputs. [OpenLineage object model](https://openlineage.io/docs/spec/object-model/), [facets](https://openlineage.io/docs/spec/facets/).
+For emitting and collecting execution metadata, see [OpenLineage and DataHub](data-quality.md#8-openlineage-and-datahub). Keep dataset identity and ownership consistent between the emitted events and the catalog.
 
 Lineage supports impact analysis, root-cause analysis, sensitive-data tracing, and deletion discovery. It does not by itself reproduce an output: you also need retained input versions, transformation code, configuration, and relevant execution context. Nor does a lineage edge prove that deletion or a security policy propagated.
 
@@ -129,22 +129,9 @@ For the retailer, the customer domain defines customer status and retention purp
 
 ## 3. Data Contracts and Schema Governance
 
-### A contract is more than a schema
+### Govern the contract
 
-A **data contract** is an explicit agreement between producers and consumers about the structure, meaning, quality, delivery, and permitted use of data. A schema says that `amount` is numeric; a contract explains whether it is gross or net, its currency and unit, and how refunds are represented.
-
-Useful contract elements include:
-
-| Element | Questions it answers |
-| --- | --- |
-| Identity and ownership | Which dataset/version is this? Who supports it? |
-| Grain and keys | What does one record represent? Where is uniqueness required? |
-| Schema | Which fields, types, nullability, and allowed values exist? |
-| Semantics | Which units, time zones, currencies, and business rules apply? |
-| Quality | Which completeness, uniqueness, range, and reference checks apply? |
-| Delivery | What freshness, ordering, lateness, replay, and availability are expected? |
-| Change process | How are versions, compatibility, notice, and deprecation handled? |
-| Governance | Which classification, purpose, access, and retention requirements apply? |
+[Data contracts and schema management](data-contracts.md) owns contract structure, serialization formats, schema registries, compatibility directions, versioning, and contract tests. Governance establishes who approves changes, which uses are permitted, and how policy obligations follow the dataset.
 
 An illustrative order contract could state:
 
@@ -167,20 +154,7 @@ This is a design example, not a standard contract format. Its purpose is to expo
 
 ### Schema compatibility
 
-In reader/writer terminology:
-
-| Mode | Guarantee | Typical deployment implication |
-| --- | --- | --- |
-| Backward | A new reader can read data written with the previous schema | Upgrade readers before writers |
-| Forward | A previous reader can read data written with the new schema | Upgrade writers before readers |
-| Full | Both directions hold | Either upgrade order within the validated scope |
-| Transitive variant | Checks the chosen directions against all earlier registered versions | Supports a broader version history |
-
-Confluent distinguishes compatibility against the latest version from transitive checks across earlier versions. Exact rules depend on the schema format, field definitions, and registry configuration. A compatible wire format also does not prove compatible application behavior. [Confluent schema evolution](https://docs.confluent.io/platform/current/schema-registry/fundamentals/schema-evolution.html).
-
-Adding a field can break positional readers, strict validation, or downstream `SELECT *` assumptions. Removing a field can pass a format check while breaking business code that uses it. Changing cents to dollars is a semantic break even if the physical type stays numeric.
-
-For replay, check the schemas actually present in retained data. Compatibility only with yesterday's version does not establish that a new consumer can process a year of history. Preserve decoding metadata and required schema versions for the replay period.
+Use the [compatibility rules](data-contracts.md#4-backward-forward--full-compatibility) and [migration procedure](data-contracts.md#5-schema-evolution-breaking-changes--versioning) in the contracts guide. Governance must track supported consumers, retained schema versions, and approval of semantic breaks; registry acceptance alone is not that approval.
 
 ### Governing changes end to end
 

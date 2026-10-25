@@ -106,50 +106,9 @@ This checks a nonempty table, populated IDs, and allowed nonmissing status value
 
 ### dbt generic and singular data tests
 
-dbt provides built-in `not_null`, `unique`, `accepted_values`, and `relationships` data tests. A **generic test** is reusable and configured in YAML. A **singular test** is a SQL query identifying violating records. Normally, zero returned failures means success; severity and failure thresholds can alter the outcome. [dbt data tests](https://docs.getdbt.com/docs/build/data-tests).
+Use the [dbt testing guide](../pipelines/dbt.md#4-testing--data-quality) for test definitions, YAML and SQL examples, null handling, relationship checks, severity, and unit tests. Keep each rule in one place alongside the model that owns it.
 
-The YAML below uses the `arguments` syntax available in dbt Core 1.10.5+:
-
-```yaml
-version: 2
-
-models:
-  - name: orders
-    columns:
-      - name: order_id
-        data_tests:
-          - not_null
-          - unique
-      - name: status
-        data_tests:
-          - not_null
-          - accepted_values:
-              arguments:
-                values: [pending, completed, cancelled]
-      - name: customer_id
-        data_tests:
-          - not_null
-          - relationships:
-              arguments:
-                to: ref('customers')
-                field: customer_id
-```
-
-`relationships` excludes null keys, so add `not_null` separately when the relationship is mandatory. Likewise, an allowed-values check does not replace a missing-value check. A relationship test verifies parent existence, not parent-key uniqueness. [dbt test properties](https://docs.getdbt.com/reference/resource-properties/data-tests).
-
-A singular test for an impossible timestamp ordering might be:
-
-```sql
-select order_id, ordered_at, shipped_at
-from {{ ref('orders') }}
-where shipped_at < ordered_at
-```
-
-Null timestamps do not satisfy this predicate. Test required timestamps separately. Do not incorrectly reject pending orders whose shipment timestamp is legitimately absent.
-
-`dbt test` checks existing resources. `dbt build` integrates selected builds and tests in dependency order; blocking test failures can skip dependent resources. Source freshness is a separate operation, run with `dbt source freshness`; plan it explicitly in orchestration. Source freshness describes source arrival, not whether the final mart has successfully refreshed. [dbt build](https://docs.getdbt.com/reference/commands/build), [source freshness](https://docs.getdbt.com/docs/deploy/source-freshness).
-
-**Data tests versus unit tests:** Data tests inspect actual data. Unit tests exercise transformation logic against controlled input and expected output. A correct transformation can process bad inputs; both layers matter.
+For monitoring, schedule source freshness separately from model builds and tests. A fresh source does not prove that the final mart refreshed. Record the tested batch, ruleset version, and publication decision as part of the quality result.
 
 ### Design useful results
 
@@ -277,24 +236,11 @@ Measure detection delay and false-alert burden. Repeated unactionable alerts tra
 
 ## 5. Data Lineage, Impact Analysis, and Root Cause Analysis
 
-### What lineage represents
+### Use lineage during an incident
 
-**Data lineage** records how datasets and columns depend on one another through transformations. **Table-level lineage** shows that `daily_revenue` depends on `orders`. **Column-level lineage** can show that `daily_revenue.revenue` derives from `orders.amount` and depends on status filters and currency rules.
-
-**Design lineage** describes declared or parsed dependencies. **Runtime lineage** records what a particular execution actually read and wrote. Neither is automatically complete: dynamic SQL, external scripts, temporary tables, and unsupported connectors can create gaps.
+The [governance guide](governance.md#1-data-catalogs-metadata-management-and-lineage) defines lineage levels, design versus runtime lineage, and coverage gaps. Here, use that graph with run IDs, partitions, timestamps, and dataset versions to locate the affected execution.
 
 Keep data dependencies distinct from scheduling dependencies. A task can depend on another task for control flow without consuming its data. Conversely, a shared lookup table can affect a result without an obvious scheduler dependency.
-
-```mermaid
-flowchart LR
-    A[Source orders] --> C[Validated orders]
-    B[Source customers] --> D[Customer dimension]
-    D --> C
-    C --> E[Daily revenue]
-    E --> F[Finance dashboard]
-```
-
-The graph explains dependencies; run IDs, partitions, timestamps, and dataset versions connect those dependencies to a particular incident.
 
 ### Impact analysis: look downstream
 

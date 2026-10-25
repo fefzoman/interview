@@ -325,27 +325,9 @@ If target changes and the checkpoint share a transaction boundary, commit them t
 
 ### CDC, watermarking, and high-water marks
 
-**Change data capture (CDC)** captures inserts, updates, and deletes, often from a database transaction log. Log positions and transaction metadata support ordering and recovery. Snapshot bootstrap must coordinate with log capture so changes during the snapshot are neither lost nor misapplied.
+Use [incremental extraction](../ingestion/ingestion.md#5-full-load-incremental-extraction-and-watermarks) for bounded windows, cursor ties, and polling limits, and [CDC](../ingestion/replication.md#2-change-data-capture-cdc) for log positions and snapshot handoff. Here, decide how source changes affect warehouse facts, dimensions, and historical corrections.
 
-**High-water mark** commonly means a saved extraction position, such as a commit sequence or `updated_at` boundary. In stream processing, a **watermark** often estimates event-time progress and controls how long state remains open for late data. These meanings are related to progress but are not interchangeable.
-
-| Mechanism | Advantage | Important limitation |
-| --- | --- | --- |
-| Log-based CDC | Captures mutations, including deletes, with source positions | Requires permissions, bootstrap coordination, and sufficient log retention |
-| Timestamp polling | Simple when a reliable change column exists | Clock precision, late commits, unchanged timestamps, and hard deletes can cause gaps |
-| Increasing ID | Efficient for strictly appended data | Usually misses updates and deletes; allocation order may differ from commit order |
-| Overlapping lookback | Reprocesses a recent window to tolerate bounded lateness | Requires deduplication and cannot recover arbitrarily late changes |
-
-For a reliable timestamp source, use a bounded window with parameters in the source timezone:
-
-```sql
-SELECT order_id, status, updated_at
-FROM source_orders
-WHERE updated_at >= :window_start
-  AND updated_at < :window_end;
-```
-
-Advance the committed boundary to `window_end` only after success. An overlap moves the next `window_start` backward. Ties need a defined paging strategy, often `(updated_at, primary_key)` within a stable snapshot. A tuple cursor helps paging ties but does not solve a transaction that commits later with an older timestamp. Use CDC or periodic reconciliation when that behavior is possible.
+An extraction cursor tracks source progress; an event-time watermark guides late-data handling. Neither proves that a warehouse batch has been reconciled and published. Advance warehouse progress only under the recovery protocol above.
 
 ### Full refresh vs. incremental vs. MERGE
 
@@ -400,16 +382,7 @@ This prepares a current-state batch under the same assumptions as the `MERGE`. `
 
 ### Schema evolution and data contracts
 
-Technical compatibility and semantic compatibility are different. Adding a nullable field is often structurally compatible, but can still break a consumer using positional columns or `SELECT *`. Changing an amount from dollars to cents can preserve the SQL type while breaking every metric.
-
-A useful **data contract** defines:
-
-- Schema, nullability, grain, keys, and event identity.
-- Field meaning, units, timezone, and allowed values.
-- Ordering, delete behavior, history, and late-data policy.
-- Delivery expectations, ownership, versioning, and deprecation rules.
-
-Validate at ingestion and publication boundaries. Quarantine malformed or incompatible records with enough metadata for repair, protect sensitive payloads, and make rejected volumes visible. Automatic schema evolution should not silently accept a changed business meaning.
+Use [data contracts](../quality-and-governance/data-contracts.md) for schema and semantic compatibility. For a warehouse change, review fact grain, dimension keys, historical interpretation, downstream metrics, and migration of existing models. Validate at both ingestion and publication; protect and account for quarantined records.
 
 ### Data reconciliation and validation
 
@@ -563,16 +536,9 @@ Under compute-time pricing, doubling compute but halving runtime can leave compu
 
 ### Data quality dimensions and testing
 
-| Dimension | Question | Example test |
-| --- | --- | --- |
-| Accuracy | Does it reflect the business reality? | Compare settled payments with the payment provider |
-| Completeness | Is expected data present? | All expected source partitions and mandatory fields arrived |
-| Uniqueness | Are identities duplicated? | One row per order-line business key |
-| Validity | Does it obey defined rules? | Status belongs to the approved domain |
-| Consistency | Do related representations agree? | Order totals match allocated lines under the same rules |
-| Timeliness | Is it available when needed? | Source progress meets the freshness objective |
+[Data quality and observability](../quality-and-governance/data-quality.md) owns quality definitions, monitoring, reconciliation, and publication gates. [Data platform testing](../quality-and-governance/testing.md) owns test levels, fixtures, and failure injection. Apply them to the warehouse's declared grain and history rules.
 
-Test at multiple boundaries: contract checks at ingestion, invariants after transformation, reconciliation before publication, and freshness or volume monitoring during operation. Unit tests cover transformation logic on controlled inputs; data tests inspect actual datasets; integration tests cover the pipeline path.
+For a fact table at one row per source order line:
 
 ```sql
 SELECT source_system, order_id, order_line_id, COUNT(*) AS row_count
@@ -585,79 +551,35 @@ An empty result passes this uniqueness check; it does not prove completeness or 
 
 ### Data lineage and metadata management
 
-**Lineage** connects sources, transformations, models, and downstream consumers. Table-level lineage supports impact analysis; column-level lineage helps trace sensitive or derived attributes. Dynamic SQL, external scripts, and manual extracts can leave gaps.
-
-**Metadata** includes technical schemas, operational run information, and business meaning. Keep source positions, batch IDs, code versions, ownership, classification, and transformation dependencies. Lineage helps find affected dashboards after a bad load; reproducibility also requires retained inputs and versioned rules.
-
-### Data catalog, ownership, and contracts
-
-A catalog makes assets discoverable and records definitions, ownership, classifications, and reliability expectations. Naming a table “certified” is useful only if a defined validation and ownership process supports it.
-
-An owner is accountable for meaning, access decisions, quality expectations, and lifecycle. A steward may handle definitions and curation; an operating team may handle execution. Contracts make producer-consumer obligations explicit. Agree on who responds to an incident and who approves breaking semantic changes.
+Use [catalogs, ownership, and lineage](../quality-and-governance/governance.md#1-data-catalogs-metadata-management-and-lineage) for metadata definitions and operating responsibilities. For a warehouse load, retain source positions, batch IDs, code versions, and model dependencies. These connect an incorrect dashboard result to the affected fact or dimension partitions.
 
 ### PII protection, RBAC, and row/column security
 
-- **Minimize and classify:** collect only needed sensitive fields and identify where they flow.
-- **RBAC:** grant permissions through job-function roles using least privilege; separate administration, loading, and consumption duties where needed.
-- **Row security:** restrict visible records, such as tenant or regional data.
-- **Column security:** restrict or mask sensitive attributes such as email or salary.
-- **Encryption and tokenization:** protect storage and transport; tokenize identifiers when direct identity is unnecessary.
+Use [governance and security](../quality-and-governance/governance.md) for access models, sensitive-data protection, and enforcement boundaries. In warehouse publication, preserve those controls on derived tables, materializations, exports, and caches; a dashboard filter is not a security boundary.
 
-Enforce controls at a trusted query or storage boundary. A dashboard filter is not a security boundary. An email hash is usually pseudonymous, not anonymous, and unsalted hashes can be guessed. Encryption at rest does not stop a user with authorized query access from reading plaintext.
-
-Check service accounts, raw storage, exports, caches, derived tables, and logs, because each can expose data outside the intended view. Preserve required access controls when publishing materialized data. Test negative access cases with representative roles rather than validating only successful reads.
+Test tenant-aware joins and keys, negative access cases, and raw-storage bypass paths. Resource isolation is separate from access isolation.
 
 ### Auditing, compliance, and retention
 
-Audit access, privilege changes, exports, pipeline changes, and important data mutations. Protect logs against unauthorized modification and avoid putting sensitive payloads in them.
-
-Retention defines how long each data class and its copies remain available. Coordinate warehouse tables, raw landing, snapshots, backups, caches, and downstream extracts. A business delete event, a privacy erasure request, and expiration under a retention policy have different meanings. Legal requirements and legal holds need review by the responsible policy or legal team; no single retention period fits every dataset.
-
-**Interview question: How do you protect tenant data?** Establish a trusted tenant identity, enforce row and object access, include tenant identity in joins and keys where required, restrict exports and raw access, and test for cross-tenant leakage. Resource isolation is a separate requirement.
+Follow the [retention and deletion lifecycle](../quality-and-governance/governance.md#7-data-retention-deletion-and-gdpr-compliance) and [audit requirements](../quality-and-governance/governance.md#8-audit-logs-access-monitoring-and-policy-enforcement). For warehouse operations, account for historical dimensions, staging copies, snapshots, backups, caches, and downstream extracts. A business delete, privacy erasure, and retention expiry require different handling.
 
 ## 8. Modern DWH & Analytics
 
 ### Snowflake, BigQuery, and Redshift architectures
 
-| Platform | Architecture and execution | Practical design focus |
-| --- | --- | --- |
-| Snowflake | Shared persistent storage; independent MPP virtual warehouses; cloud services for coordination and metadata | Warehouse sizing and concurrency; micro-partition pruning; workload separation |
-| BigQuery | Serverless distributed analytics with separate storage and compute; slots represent compute capacity | Partitioning, clustering, bytes scanned, slot capacity, and reservations |
-| Redshift | MPP execution with leader/compute-node concepts for provisioned clusters; RA3 managed storage separates storage growth from compute; Serverless offers managed capacity | Distribution, sort design, workload management, capacity, and movement |
+Use [Snowflake](../cloud-and-platforms/snowflake.md), [BigQuery in GCP](../cloud-and-platforms/gcp.md#3-bigquery-architecture--internals), and [Redshift in AWS](../cloud-and-platforms/aws.md#5-data-warehousing--analytics) for product architecture and operations.
 
-Snowflake's three layers are storage, compute, and cloud services. [Snowflake architecture](https://docs.snowflake.com/en/user-guide/intro-key-concepts).
-
-BigQuery separates storage and compute and offers managed columnar storage. Serverless does not mean that capacity, contention, and query design no longer matter. [BigQuery overview](https://docs.cloud.google.com/bigquery/docs/introduction).
-
-For Redshift, distinguish provisioned-cluster concepts from the Serverless namespace/workgroup model; older local-storage-only descriptions do not explain RA3 managed storage. [Redshift system architecture](https://docs.aws.amazon.com/redshift/latest/dg/c_high_level_system_architecture.html), [provisioned clusters and managed storage](https://docs.aws.amazon.com/redshift/latest/mgmt/working-with-clusters.html), [Redshift Serverless](https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-whatis.html).
-
-These products support overlapping workloads. Compare the actual data sizes, query mix, update patterns, concurrency, access controls, operational skills, and measured cost. Do not assume SQL syntax, constraint enforcement, or transaction scope transfers unchanged between them.
+For warehouse selection, compare query mix, update patterns, concurrency, workload isolation, and measured cost. Verify platform-specific SQL syntax, constraint enforcement, and transaction scope before implementing the model.
 
 ### dbt: models, materializations, tests, and snapshots
 
-dbt manages analytical transformation code and its dependency graph. It generally operates after data has been loaded; it is not a replacement for source extraction or log-based CDC.
+The [dbt guide](../pipelines/dbt.md) owns materializations, incremental configuration, tests, and snapshot implementation. Here, choose the warehouse semantics first: current state or history, required grain, change identity, and publication boundary.
 
-A SQL model describes a dataset. `ref()` resolves another model and records a dependency; `source()` references declared source data. A materialization determines how the result is represented:
-
-| Materialization | Behavior | Tradeoff |
-| --- | --- | --- |
-| View | Stores a query definition | Fresh query-time evaluation, repeated compute |
-| Table | Rebuilds a persisted result on a run | Fast reads, rebuild work and between-run staleness |
-| Incremental | Updates a persisted table from a selected change set | Efficient updates, author owns change selection and recovery correctness |
-| Ephemeral | Compiles into consuming queries, commonly as CTEs | No separately queryable relation; repeated logic can enlarge queries |
-| Materialized view | Uses supported warehouse-managed materialized views | Refresh and feature support depend on the adapter and engine |
-
-An incremental `unique_key` config tells an applicable strategy how to match rows; it does not itself prove uniqueness or retrieve missing late records. Strategies such as merge and partition overwrite depend on the adapter. [dbt materializations](https://docs.getdbt.com/docs/build/materializations), [incremental models](https://docs.getdbt.com/docs/build/incremental-models).
-
-**Data tests** check properties of stored data. Common generic tests include `not_null`, `unique`, `accepted_values`, and `relationships`; singular tests are SQL queries returning failing rows. Tests do not automatically quarantine bad rows or create enforced database constraints. Unit tests exercise model logic on controlled inputs. [dbt data tests](https://docs.getdbt.com/docs/build/data-tests), [dbt unit tests](https://docs.getdbt.com/docs/build/unit-tests).
-
-**Snapshots** record observed changes in mutable data using Type 2-style validity metadata. Timestamp or check strategies detect changes between runs. If a source changes A → B → C between snapshots, only A and C may be observed; snapshots do not reconstruct the missing B. Delete handling and configuration depend on the dbt version and strategy. [dbt snapshots](https://docs.getdbt.com/docs/build/snapshots).
+A snapshot records observed states between runs; it cannot recover an intermediate version it never observed. Choose source CDC when every change is required.
 
 ### Semantic layers
 
-A semantic layer centralizes business entities, relationships, dimensions, and metric definitions so tools calculate the same concept consistently. For revenue, define the qualifying event, returns treatment, currency basis, time dimension, and aggregation behavior.
-
-A metric definition alone is insufficient if joins introduce fanout. Relationships need cardinality and entity keys; metrics need valid grains and time semantics. A semantic layer can generate queries over governed models, but it depends on the quality and security of those models. dbt's Semantic Layer uses semantic models and metric definitions to serve consistent metrics. [dbt Semantic Layer](https://docs.getdbt.com/docs/use-dbt-semantic-layer/dbt-sl).
+The [semantic layer and metrics guide](semantic-layer.md) owns metric definitions, join cardinality, valid grains, time semantics, and MetricFlow. Warehouse models must supply the tested facts and dimensions those definitions depend on; storage and transformation alone do not establish a consistent business metric.
 
 ### Medallion architecture: Bronze, Silver, and Gold
 

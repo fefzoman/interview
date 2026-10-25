@@ -41,6 +41,27 @@ Interview guides grouped by subject. Start with foundations, then follow the top
 - **ai/**
   - [AI data engineering](ai/ai.md)
 
+## Where to review each concept
+
+Read shared concepts in the main guide below, then use product guides for implementation and failure scenarios. A related topic appearing in a product guide applies the concept to that system; it does not need a second full introduction.
+
+| Concept | Main guide | Continue with |
+| --- | --- | --- |
+| Distributed systems, cross-system transactions, storage, performance, and reliability | [Core engineering](foundations/core.md) | Spark, Flink, Kafka, and system design |
+| Storage engines, indexes, WAL, ACID, MVCC, isolation, query planning, and execution | [Database internals](foundations/database.md) | SQL and database-specific guides |
+| Python language, runtime, concurrency, and Python testing | [Python](foundations/python.md) | Pipeline implementation examples |
+| SQL semantics, analytical queries, query rewrites, and transaction statements | [SQL](foundations/sql.md) | dbt and warehouse-specific SQL |
+| API/file extraction, cursors, retries, ingestion identity, and replay | [Ingestion](ingestion/ingestion.md) | Replication for database CDC; Kafka for broker behavior |
+| Database CDC, snapshot handoff, source positions, replication lag, and cutover | [Replication](ingestion/replication.md) | Source database and target platform guides |
+| Warehouse architecture, grain, facts, dimensions, and historical modeling | [Data warehousing](storage-and-modeling/dwh.md) | dbt, Iceberg, and platform guides |
+| Metric definitions, aggregation, semantic joins, and MetricFlow | [Semantic layer](storage-and-modeling/semantic-layer.md) | Warehouse models that supply the metrics |
+| Schema formats, registries, compatibility, evolution, and contract tests | [Data contracts](quality-and-governance/data-contracts.md) | Governance for approvals; testing for pipeline validation |
+| Quality dimensions, monitoring, reconciliation, publication gates, and lineage tools | [Data quality](quality-and-governance/data-quality.md) | dbt for dbt test syntax; testing for fixtures and failure injection |
+| Test levels, fixtures, replay verification, checksums, load tests, and failure injection | [Platform testing](quality-and-governance/testing.md) | Python and dbt for tool-specific test implementation |
+| Catalogs, ownership, lineage concepts, access, privacy, retention, and audits | [Governance](quality-and-governance/governance.md) | Cloud and platform guides for enforcement |
+| Cost models, sizing economics, budgets, and cost attribution | [FinOps](system-design/finops.md) | Platform-specific resource and query costs |
+| Requirements, capacity estimates, component choices, and end-to-end failure handling | [System design](system-design/data-platform-system-design.md) | The worked design after recalling the component guides |
+
 ## Recall flow before an interview
 
 Follow one dataset from source to consumer. At each step, recall the concepts without opening the guide, explain a trade-off and a failure scenario, then review only what you missed.

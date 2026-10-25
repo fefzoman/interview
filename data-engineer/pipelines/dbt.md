@@ -835,11 +835,9 @@ Ask which consumers depend on a model before changing its grain or dropping a co
 
 ### Semantic Layer and metrics
 
-The Semantic Layer centralizes metric definitions and query semantics rather than letting every dashboard redefine revenue or active customers. MetricFlow uses semantic metadata such as entities, dimensions, and aggregation definitions to construct metric queries and valid joins.
+Use [Semantic Layer and MetricFlow](../storage-and-modeling/semantic-layer.md#3-dbt-semantic-layer--metricflow) for semantic model configuration and query planning, and [metric definitions](../storage-and-modeling/semantic-layer.md#2-metric-definitions--business-logic-centralization) for business rules and aggregation behavior.
 
-For a revenue metric, define the underlying amount, inclusion rules, aggregation, event-time dimension, and supported slicing. A ratio such as conversion rate usually needs aggregated conversions divided by aggregated eligible visits; averaging row-level percentages can answer a different question.
-
-Semantic metadata does not remove the need for correct model grain or protect every arbitrary join from fanout. Availability and YAML syntax depend on the product/version; current docs include newer definitions embedded in model configuration, while older projects use separate semantic-model declarations. [Semantic models](https://docs.getdbt.com/docs/build/semantic-models), [Semantic Layer](https://docs.getdbt.com/docs/use-dbt-semantic-layer/dbt-sl?version=2).
+The dbt models supplying these definitions still need tested grain, keys, and historical validity. Keep semantic configuration aligned with the installed product/version.
 
 ### Model versioning and contracts
 
