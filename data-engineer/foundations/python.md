@@ -1,11 +1,5 @@
 # Python: Data Engineer Interview Guide
 
-Python is the control and integration language in many data platforms: it connects systems, validates records, coordinates work, and delegates expensive operations to databases or native execution engines. In interviews, explain the language behavior, its cost, and what happens when the process fails halfway through a pipeline.
-
-**Reference baseline:** Python 3.14 documentation, checked on October 21, 2026. Most examples also work on Python 3.11+, with newer syntax and APIs identified where relevant. CPython implementation details are distinguished from language guarantees. Third-party library behavior depends on the installed version; this guide does not claim that every library supports every Python build.
-
-**Examples:** Each Python block is independent unless its surrounding text names a file or another block. Examples that need a database, network service, data file, or third-party package identify that dependency. They illustrate interview concepts rather than a complete production application. Paths, URLs, schemas, and table names are illustrative.
-
 ## Contents
 
 1. [Language Fundamentals](#1-language-fundamentals)
@@ -40,8 +34,6 @@ Python is dynamically typed: objects have types, and a name can be rebound to an
 | `NoneType` | No | `None` represents an absent value; distinguish absence from zero or an empty string |
 
 **Mutable** means the object's state can change without replacing its identity. **Hashable** means it provides a hash that stays stable during its lifetime and equality compatible with that hash. Equal hashable objects must have equal hashes; equal hashes do not imply equal objects. A tuple containing a list is immutable as a container but unhashable. User-defined mutable objects can be hashable by identity, so mutability and hashability are related concepts, not synonyms. [Python data model](https://docs.python.org/3.14/reference/datamodel.html).
-
-For financial decimal rules, use `decimal.Decimal` created from a decimal string, such as `Decimal("19.95")`, and define scale and rounding explicitly. Converting an already rounded binary float to `Decimal` cannot recover the intended original decimal value. For measurements, floating point is often appropriate; compare approximate results with `math.isclose` and a meaningful tolerance.
 
 ### Variables, references, identity, and equality
 
