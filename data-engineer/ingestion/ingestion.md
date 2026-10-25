@@ -661,4 +661,4 @@ Name the assumptions behind a guarantee. If the source exposes only mutable curr
 - A schema change invalidates every incoming record: stop or quarantine the affected scope, alert, and expose the delivery gap.
 - A replay reaches already processed events: distinguish duplicate delivery from intentional recomputation through corrected logic.
 
-For deeper database capture details, see [Data Replication](replication.md). For event-log ingestion concepts, see [Kafka](kafka.md). For broader delivery and transaction concepts, see [Core Engineering Concepts](core.md).
+For deeper database capture details, see [Data Replication](replication.md). For event-log ingestion concepts, see [Kafka](kafka.md). For broader delivery and transaction concepts, see [Core Engineering Concepts](../foundations/core.md).

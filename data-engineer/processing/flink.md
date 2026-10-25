@@ -333,7 +333,7 @@ Transaction timeouts must cover the checkpoint and recovery lifecycle, with marg
 
 An upsert keyed by `(customer_id, window_start, window_end)` can replace a repeated window result safely. By contrast, retrying `UPDATE totals SET amount = amount + 5` increments twice unless a transaction or deduplication protocol prevents it. Stable identities, suitable unique constraints, and version rules must match the business operation.
 
-An idempotent final row does not automatically deduplicate database triggers, audit records, or notifications. Similarly, two sinks that each provide exactly-once delivery do not automatically create one atomically visible transaction across both destinations. Identify every external effect when stating the guarantee. [Related Kafka delivery semantics](kafka.md#5-delivery--processing-semantics).
+An idempotent final row does not automatically deduplicate database triggers, audit records, or notifications. Similarly, two sinks that each provide exactly-once delivery do not automatically create one atomically visible transaction across both destinations. Identify every external effect when stating the guarantee. [Related Kafka delivery semantics](../ingestion/kafka.md#5-delivery--processing-semantics).
 
 **Interview trap:** an updated result from a late window firing is a legitimate revision. Checkpoint-based exactly-once does not turn it into the same thing as a failure-induced duplicate.
 

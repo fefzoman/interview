@@ -673,4 +673,4 @@ If the commit existed only on the lost asynchronous primary, promotion can lose 
 - “A majority acknowledgment proves every read is current.” The replication and read protocols must enforce that property.
 - “Automatic failover guarantees zero data loss.” Durability, eligible promotion, fencing, and the failure model determine that guarantee.
 
-Related guides: [Core Engineering Concepts](core.md), [Data Warehousing](dwh.md), [Data Replication](replication.md), and [SQL](sql.md).
+Related guides: [Core Engineering Concepts](core.md), [Data Warehousing](../storage-and-modeling/dwh.md), [Data Replication](../ingestion/replication.md), and [SQL](sql.md).

@@ -8,7 +8,7 @@ Databricks combines distributed processing, transactional lakehouse tables, gove
 
 **Study order:** Delta Lake internals → Unity Catalog → ingestion and CDC → Lakeflow → Spark optimization → production recovery and cost. Then revisit architecture, development, and interoperability.
 
-Examples are independent teaching examples, not a deployment script. They assume a disposable Unity Catalog catalog named `prep`, the schemas and volumes mentioned, appropriate privileges, and compatible compute. SQL and PySpark examples have not been executed against a Databricks workspace. Background Spark concepts are covered in [spark.md](spark.md), and table-format comparisons in [iceberg.md](iceberg.md).
+Examples are independent teaching examples, not a deployment script. They assume a disposable Unity Catalog catalog named `prep`, the schemas and volumes mentioned, appropriate privileges, and compatible compute. SQL and PySpark examples have not been executed against a Databricks workspace. Background Spark concepts are covered in [spark.md](../processing/spark.md), and table-format comparisons in [iceberg.md](../storage-and-modeling/iceberg.md).
 
 ## Contents
 
@@ -446,7 +446,7 @@ For Kafka, preserve topic, partition, offset, event key, event time, and raw pay
 
 Monitor both ingestion throughput and lag relative to source retention. A healthy restarted consumer cannot recover Kafka records that have already expired.
 
-Watermarks bound state and define handling of late event-time data for supported stateful operations. They do not guarantee that every late event will be accepted, sort the source globally, or replace CDC ordering. Unbounded deduplication or joins can grow state indefinitely. Define a lateness policy and a correction path for data beyond it. See [Spark streaming fundamentals](spark.md) for watermarks, state, joins, and output modes.
+Watermarks bound state and define handling of late event-time data for supported stateful operations. They do not guarantee that every late event will be accepted, sort the source globally, or replace CDC ordering. Unbounded deduplication or joins can grow state indefinitely. Define a lateness policy and a correction path for data beyond it. See [Spark streaming fundamentals](../processing/spark.md) for watermarks, state, joins, and output modes.
 
 ### CDC, incremental processing, and SCD Types 1/2
 
@@ -719,7 +719,7 @@ AQE can reduce inefficient execution, but it cannot repair incorrect join condit
 | Join output grows unexpectedly | Non-unique keys or missing join predicate | Fix the data model/query |
 | Driver out of memory | `collect()`, `toPandas()`, oversized local metadata | Keep processing distributed and bound local results |
 
-Salting can distribute a hot key but adds complexity and can multiply one join side. Use it only after identifying skew and validating that the rewritten join preserves results. More workers cannot divide an indivisible hot task without changing the partitioning or execution strategy. [Spark joins and skew](spark.md)
+Salting can distribute a hot key but adds complexity and can multiply one join side. Use it only after identifying skew and validating that the rewritten join preserves results. More workers cannot divide an indivisible hot task without changing the partitioning or execution strategy. [Spark joins and skew](../processing/spark.md)
 
 ### Photon vs. Spark execution
 

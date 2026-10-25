@@ -6,7 +6,7 @@ A data platform moves data from operational systems to trustworthy products for 
 
 **Running example:** Design a multi-tenant commerce analytics platform that ingests order changes, payment events, and application events. Operational dashboards need fresh data within one minute; finance needs reconciled daily results. Historical data must support corrections and replay.
 
-**Related guides:** [Core engineering concepts](core.md), [data warehousing](dwh.md), [replication](replication.md), [Kafka](kafka.md), [Spark](spark.md), and [Iceberg](iceberg.md).
+**Related guides:** [Core engineering concepts](../foundations/core.md), [data warehousing](../storage-and-modeling/dwh.md), [replication](../ingestion/replication.md), [Kafka](../ingestion/kafka.md), [Spark](../processing/spark.md), and [Iceberg](../storage-and-modeling/iceberg.md).
 
 ## Contents
 

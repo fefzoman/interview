@@ -160,7 +160,7 @@ The dates have different meanings: arrival date supports ingestion and replay; b
 
 **Partitioning** reduces the data considered for a query when predicates align with the layout. Avoid high-cardinality keys that create huge numbers of tiny partitions. **Columnar formats** such as Parquet reduce reads of unused columns. Compression and row-group statistics can reduce I/O further.
 
-Small files increase listing, planning, request, and task-scheduling overhead. A million tiny files can be expensive even if their total bytes are modest. Compact files, batch writes, and control writer parallelism. A few hundred MiB per compressed output file can be a starting experiment, not a universal target: balance parallelism, partition volume, latency, and engine behavior. For detailed layout reasoning, see [the Spark guide](spark.md) and [the Iceberg guide](iceberg.md).
+Small files increase listing, planning, request, and task-scheduling overhead. A million tiny files can be expensive even if their total bytes are modest. Compact files, batch writes, and control writer parallelism. A few hundred MiB per compressed output file can be a starting experiment, not a universal target: balance parallelism, partition volume, latency, and engine behavior. For detailed layout reasoning, see [the Spark guide](../processing/spark.md) and [the Iceberg guide](../storage-and-modeling/iceberg.md).
 
 ### Glue Data Catalog and partition management
 
@@ -300,7 +300,7 @@ MSK manages Apache Kafka infrastructure. Topics contain partitions; ordering is 
 
 Kafka Connect uses **source connectors** to bring data into Kafka and **sink connectors** to deliver it elsewhere. MSK Connect manages compatible connector workers and scaling. Connector support, error handling, offsets, schema conversion, and destination behavior remain part of the design. [MSK Connect](https://docs.aws.amazon.com/msk/latest/developerguide/msk-connect.html)
 
-Kafka's idempotent producers and transactions address particular Kafka boundaries. They do not automatically make a write to an external database or S3 happen exactly once. Choose MSK when Kafka compatibility, its connector ecosystem, or existing Kafka operations matter; compare that value with the operational and cost model. See [the Kafka guide](kafka.md) for partitioning and transaction details.
+Kafka's idempotent producers and transactions address particular Kafka boundaries. They do not automatically make a write to an external database or S3 happen exactly once. Choose MSK when Kafka compatibility, its connector ecosystem, or existing Kafka operations matter; compare that value with the operational and cost model. See [the Kafka guide](../ingestion/kafka.md) for partitioning and transaction details.
 
 ### SQS, SNS, and EventBridge
 
@@ -778,7 +778,7 @@ Streaming does not remove the need for backfills or reconciliation. Batch does n
 | Lakehouse | Add transactional table management to lake storage | Table metadata, compatibility, maintenance, concurrent writes |
 | Data warehouse | Manage analytical tables in a SQL serving system | Modeling, workload management, ingestion, query performance |
 
-A lakehouse can use S3, Iceberg, Glue metadata, Lake Formation, and compatible engines. A warehouse can use Redshift while retaining raw history in S3. These approaches often coexist: open lake storage for replay/exploration, warehouse marts for repeated BI. See [the warehouse guide](dwh.md) for dimensional modeling.
+A lakehouse can use S3, Iceberg, Glue metadata, Lake Formation, and compatible engines. A warehouse can use Redshift while retaining raw history in S3. These approaches often coexist: open lake storage for replay/exploration, warehouse marts for repeated BI. See [the warehouse guide](../storage-and-modeling/dwh.md) for dimensional modeling.
 
 ### Example A: daily batch reporting
 
