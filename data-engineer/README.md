@@ -41,6 +41,16 @@ Interview guides grouped by subject. Start with foundations, then follow the top
 - **ai/**
   - [AI data engineering](ai/ai.md)
 
-## How to study
+## Recall flow before an interview
 
-For each topic, explain the core concepts aloud, work through the examples, and answer the interview questions or scenarios. After the fundamentals and pipeline topics, use system design to practice connecting ingestion, processing, storage, reliability, and cost decisions.
+Follow one dataset from source to consumer. At each step, recall the concepts without opening the guide, explain a trade-off and a failure scenario, then review only what you missed.
+
+1. **Foundations:** solve a SQL query and a short Python task; recall joins, window functions, indexes, transactions, and distributed systems basics.
+2. **Ingestion:** explain batch, streaming, and CDC; trace offsets, retries, deduplication, schema changes, and replay.
+3. **Processing:** walk through a Spark or Flink job; recall partitioning, shuffles, skew, state, watermarks, and recovery.
+4. **Storage and modeling:** choose a warehouse or lakehouse layout; explain grain, facts and dimensions, partitioning, table formats, and query performance.
+5. **Pipelines:** connect ingestion, transformation, and serving; explain dependencies, incremental runs, idempotency, backfills, and orchestration.
+6. **Quality and governance:** explain how you validate results, detect failures, enforce contracts, trace lineage, and protect sensitive data.
+7. **Cloud and platforms:** map the flow to the stack in the job description; recall service choices, operational limits, and cost drivers. Review AI topics if the role requires them.
+8. **System design:** sketch the complete flow from memory; state volume, freshness, reliability, and cost requirements, then defend your choices.
+9. **Final recall:** revisit the gaps you noted and rehearse project examples covering a design decision, a production incident, and a measurable improvement.
