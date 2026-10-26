@@ -1,6 +1,6 @@
 # dbt: Data Engineer Interview Guide
 
-dbt turns transformation code into tested, documented datasets and manages their dependencies. In an interview, explain the model's grain, how dbt builds it, what happens on a retry, and how you know the output is correct.
+An orders transformation may begin as one SQL file, then grow into a network of staging models, facts, tests, and reports. dbt makes that network explicit: it builds datasets from transformation code, manages their dependencies, and keeps tests and documentation alongside them. The useful questions remain concrete: what does one output row mean, how is it built, and what happens when a run is repeated?
 
 **Example baseline:** dbt Core v1.10.5+ syntax, with a compatible adapter. This is a documentation baseline, not a claim about the latest release. Unit tests require v1.8+; YAML snapshots and microbatch require v1.9+, with adapter support. Current documentation also covers the Rust-based dbt v2 engine; engine generation, adapter version, and Platform features are separate compatibility questions. Examples use SQL models; date arithmetic marked **Snowflake** must be adapted for other warehouses. These are teaching snippets, not a complete runnable project. [dbt engines and versions](https://docs.getdbt.com/docs/introduction).
 
@@ -19,6 +19,8 @@ dbt turns transformation code into tested, documented datasets and manages their
 ## 1. Architecture & Fundamentals
 
 ### dbt Core vs. dbt Platform
+
+Choosing dbt also means choosing who operates its development and execution environment. dbt Core provides the transformation framework and CLI; dbt Platform adds managed services around that work. Both normally rely on connected data-platform compute for processing, so distinguish the operating model from where the SQL runs.
 
 | Aspect | dbt Core | dbt Platform |
 | --- | --- | --- |
@@ -135,6 +137,8 @@ The model-file `config()` block can override inherited settings. Use folder defa
 
 ### View, table, incremental, and ephemeral
 
+A model's SQL describes its result, but its **materialization** determines how consumers get that result and when you pay to compute it. A small staging query, a frequently read report, and a large changing fact table can justify different choices. Consider build cost and consumer cost together.
+
 | Materialization | What dbt builds | Good fit | Main cost or limitation |
 | --- | --- | --- | --- |
 | `view` | A stored query definition | Lightweight staging with current upstream data | Consumers repeatedly pay for the query; nested views can be expensive |
@@ -195,6 +199,8 @@ Wall-clock time depends on the **critical path**, the longest chain of required 
 ## 3. Incremental Processing
 
 ### Strategies: what changes in the target?
+
+Selecting only changed input is half of an incremental design. The other half is deciding what those rows do to the target: append, replace matching keys, or rebuild complete partitions or time batches. Each strategy below needs a different completeness and replay rule.
 
 | Strategy | Basic behavior | Suitable use | Correctness requirement |
 | --- | --- | --- | --- |
@@ -350,7 +356,7 @@ For CDC, establish whether the source contains full images or partial patches, h
 
 ### Generic and singular data tests
 
-A **generic data test** is reusable, parameterized SQL written in a `{% test ... %}` block and attached through YAML. A **singular data test** is a standalone query in the test directory. Normally a test returns violating records: zero violations means success, subject to configured thresholds.
+A model can build successfully and still contain duplicate keys or invalid relationships. dbt data tests express queries that identify those violations: normally, zero violating records means success, subject to configured thresholds. A **generic test** is reusable, parameterized SQL in a `{% test ... %}` block and attached through YAML; a **singular test** is a standalone query in the test directory.
 
 | Built-in test | Checks | Important boundary |
 | --- | --- | --- |
@@ -491,7 +497,7 @@ In `dbt build`, unit tests can gate model construction, while error-level data t
 
 ### Templating, variables, and environment variables
 
-Jinja generates SQL before the warehouse runs it. `{{ ... }}` renders an expression; `{% ... %}` controls generation; `{# ... #}` is a template comment. A Jinja loop creates SQL text, not a distributed loop over warehouse rows.
+If a model repeats the same expression for several statuses, Jinja can generate that SQL before the warehouse executes it. `{{ ... }}` renders an expression, `{% ... %}` controls generation, and `{# ... #}` marks a template comment. A Jinja loop therefore repeats SQL text at generation time; it does not run a distributed loop over warehouse rows.
 
 ```sql
 {% set statuses = ['paid', 'cancelled'] %}
@@ -573,7 +579,7 @@ Packages are dbt projects containing reusable macros, models, tests, and other r
 
 ### SCD Type 2 and change-detection strategies
 
-Snapshots preserve observed versions of mutable records as SCD Type 2 history. A stable business `unique_key` identifies the record across versions.
+If a source keeps only the customer's current region, today's row cannot by itself explain last year's report. **Snapshots** preserve observed versions of mutable records as SCD Type 2 history. A stable business `unique_key` connects those versions; the change-detection strategy determines when dbt records a new one.
 
 | Strategy | Detects change using | Best when | Failure mode |
 | --- | --- | --- | --- |
@@ -651,6 +657,8 @@ A common design snapshots mutable customer source records and derives an SCD dim
 ## 7. DAG Execution & State Management
 
 ### Commands
+
+The command you run defines which work dbt attempts. Building models, testing existing relations, compiling SQL, and updating snapshots are distinct operations. Know that boundary before interpreting a successful exit as proof that the entire dataset or project was validated.
 
 | Command | Purpose | Boundary to remember |
 | --- | --- | --- |
@@ -738,7 +746,7 @@ Rerunning only the failed node may leave skipped descendants stale. Select the r
 
 ### Incremental vs. full refresh
 
-Model cost includes source scans, transformations, target matching/writes, and consumer queries. Incremental processing wins when the affected scope is much smaller than the whole table and target maintenance remains efficient. A huge merge scan, repeated small-file maintenance, or complex repair policy can eliminate the benefit.
+An incremental model can process very little new data and still spend most of its time scanning the target for a merge. Count the whole cost: source reads, transformations, target matching and writes, and consumer queries. Incremental processing helps when the affected scope is much smaller than the table and maintenance stays efficient. Large merge scans, repeated small-file work, or difficult repair procedures can erase that advantage.
 
 A full rebuild can be simpler and competitive for small dimensions or frequently rewritten datasets. Compare total compute, elapsed time, freshness, and operating burden. Maintain a rebuild/backfill procedure even when the normal run is incremental.
 
@@ -783,7 +791,7 @@ Track processed bytes or platform-equivalent compute, rows affected, query histo
 
 ### CI/CD, environments, and deployment
 
-A practical release flow is:
+A tested SQL change is ready to release only when the deployed environment, selected models, and affected consumers are accounted for. A practical release flow carries the same reviewed revision from reproducible execution through validation and publication:
 
 1. Pin the engine, adapter, and package dependencies; run from a reproducible environment.
 2. Parse/compile and run unit tests plus selected integration/data checks in an isolated CI target.

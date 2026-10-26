@@ -1,6 +1,6 @@
 # Apache Airflow: Data Engineer Interview Guide
 
-Apache Airflow orchestrates workflows: it decides when work is eligible to run, enforces dependencies, dispatches tasks, and records their outcomes. A strong interview answer connects those mechanics to a concrete pipeline: which data a run processes, where the computation happens, and what happens when execution is repeated.
+A daily revenue pipeline needs more than a schedule. It must wait for the right inputs, run steps in the right order, and recover when a task fails after doing some of its work. Airflow coordinates that workflow: it decides when tasks are eligible, dispatches them, and records their outcomes. Understanding it means keeping the workflow's progress separate from the external data those tasks change.
 
 **Example baseline:** Apache Airflow 3.1.6, using the public `airflow.sdk` authoring interface and compatible provider packages. This is a documentation baseline, not a claim about the latest release. Airflow 2 differences are called out because many interviews and deployments still use its terminology. Python examples are teaching DAGs; warehouse statements are illustrative and require the target system's transaction and parameter-binding support. [Airflow 3 migration guide](https://airflow.apache.org/docs/apache-airflow/3.1.6/installation/upgrading_to_airflow3.html).
 
@@ -20,7 +20,7 @@ Apache Airflow orchestrates workflows: it decides when work is eligible to run, 
 
 ### What Airflow does
 
-Airflow represents a workflow as a **DAG**, a directed acyclic graph. Tasks are vertices; dependencies are directed edges. A cycle would make the required execution order impossible.
+Before publishing daily revenue, you may need to extract orders, validate them, and build the reporting table. Airflow represents that required order as a **DAG**, a directed acyclic graph: tasks are vertices and dependencies are directed edges. A cycle would make the required execution order impossible, because some task would ultimately have to wait for itself.
 
 For an analytics pipeline:
 
@@ -90,6 +90,8 @@ Also verify scheduling defaults and concurrency scope when translating an answer
 ## 2. DAG Lifecycle, Scheduling, Data Intervals & Timetables
 
 ### DAG, DAG run, task, and task instance
+
+The workflow definition may say `validate_orders`, but that name alone does not tell you which day's validation failed or whether you are looking at its first attempt. Airflow distinguishes the reusable definition from a particular run, task instance, and attempt. Those identities are essential when several runs overlap.
 
 | Term | Meaning | Example |
 | --- | --- | --- |
@@ -234,6 +236,8 @@ DAG run success depends on leaf task states. An ordinary successful leaf using `
 
 ### Comparison
 
+The scheduler can decide a task is ready without running it in the scheduler process. The executor determines how that work reaches an execution environment. Compare the options by the isolation, startup time, capacity, and infrastructure your tasks require.
+
 | Aspect | LocalExecutor | CeleryExecutor | KubernetesExecutor |
 | --- | --- | --- | --- |
 | Execution location | Processes on the scheduler host | Persistent Celery worker hosts | A worker pod per task instance |
@@ -276,6 +280,8 @@ Per-task environments and resource requests suit heterogeneous workloads. The tr
 ## 4. Dynamic Task Mapping, TaskGroups & XCom
 
 ### Dynamic DAG generation vs. Dynamic Task Mapping
+
+Sometimes the tables to process are known when a DAG is parsed; sometimes an upstream task must first discover today's files. Those are different moments for determining the task structure. Separating dynamic generation from runtime mapping makes the workflow easier to predict and debug.
 
 | Technique | When the task structure is determined | Typical input |
 | --- | --- | --- |
@@ -379,7 +385,7 @@ Use Connections or a configured secrets backend for credentials. A task should p
 
 ### Three ways to wait
 
-A **sensor** waits for a condition such as a completed upstream run, an available file, or an external job's completion. Choose its waiting mechanism deliberately:
+A workflow may spend more time waiting for a file or external job than computing. A **sensor** watches for that condition, but how it waits determines whether it occupies a worker and how much scheduling overhead it creates. Choose the mechanism around the expected duration and number of waits:
 
 | Mechanism | Worker occupied while waiting? | What checks the condition? | Main tradeoff |
 | --- | --- | --- | --- |
@@ -430,6 +436,8 @@ For a dependency on a published dataset, asset scheduling can express the relati
 ## 6. Pools, Queues, Concurrency & Priority Weights
 
 ### Different controls solve different problems
+
+Suppose the cluster can run a hundred tasks but the warehouse can safely accept only four heavy loads. Adding workers does not enforce that limit. Pools, queues, concurrency limits, and priority weights act on different parts of scheduling; choose the control that matches the resource you need to protect.
 
 | Control | What it controls | Example |
 | --- | --- | --- |
@@ -516,6 +524,8 @@ The default is `downstream`. A high priority does not preempt a running task, ov
 ## 7. Catchup, Backfills, Retries & Idempotency
 
 ### Catchup vs. backfill vs. clearing
+
+After fixing a revenue calculation, you may need to recompute last month. After a network failure, you may need only to retry one task. Airflow offers several ways to repeat work, and each changes a different execution scope. First identify the runs and data intervals you intend to revisit.
 
 | Mechanism | Purpose | Example |
 | --- | --- | --- |
@@ -623,6 +633,8 @@ An interval closing does not guarantee source completeness. Choose a business po
 
 ### High availability by component
 
+A second scheduler can survive one scheduler's failure, yet the workflow still stops if the shared metadata database is unavailable. Availability therefore has to be considered along the whole execution path. The table below separates the redundancy options from the dependencies and recovery work they leave behind.
+
 | Component | HA approach | What still needs attention |
 | --- | --- | --- |
 | Scheduler | Run multiple schedulers against a supported shared metadata DB | DB contention, aggregate task capacity, task recovery |
@@ -709,6 +721,8 @@ Deploy DAG code and dependencies consistently, preserve stable task identities w
 ## 9. Interview Questions & Scenarios
 
 ### Short answers to rehearse
+
+Practice explaining a task that is ready but never starts, or a retry that duplicates output. Trace the definition, scheduling decision, execution environment, and external effect separately. The questions below help turn those distinctions into a clear account of what happened.
 
 **What does the scheduler do, and what does the DAG processor do?**
 

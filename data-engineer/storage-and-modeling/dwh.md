@@ -1,6 +1,6 @@
 # Data Warehousing (DWH): Data Engineer Interview Guide
 
-A data warehouse integrates data from operational systems into a consistent, historical foundation for analytics. In interviews, connect each design choice to the business question, data grain, correctness guarantees, latency, and operating cost.
+Ask the sales system for today's orders and it can probably answer. Ask it to compare three years of revenue using each customer's region at the time of purchase, and the problem changes. A data warehouse brings operational data together into a consistent historical foundation for those analytical questions. Its design starts with what the business needs to know and what each row must mean.
 
 **Scope:** Platform-neutral fundamentals, with selected Snowflake, BigQuery, Redshift, and dbt examples. Product documentation was checked on October 21, 2026; capabilities depend on deployment, edition, adapter, and version. SQL examples illustrate individual patterns rather than a complete deployable pipeline. Bind parameters, timestamp syntax, transactions, and `MERGE` behavior vary by engine.
 
@@ -23,7 +23,7 @@ A data warehouse integrates data from operational systems into a consistent, his
 
 ### OLTP vs. OLAP
 
-**Online transaction processing (OLTP)** serves operational workflows, such as placing an order. **Online analytical processing (OLAP)** answers analytical questions, such as monthly revenue by product category.
+Placing an order and comparing monthly revenue both involve data, but they put different demands on a system. **Online transaction processing (OLTP)** supports operational workflows such as the order placement. **Online analytical processing (OLAP)** examines many records to answer questions such as revenue by product category. That difference in workload drives the architectural choices below.
 
 | Aspect | OLTP | OLAP |
 | --- | --- | --- |
@@ -114,7 +114,7 @@ MPP describes parallel execution; shared-nothing and shared-storage describe res
 
 ### Star vs. Snowflake schemas
 
-A **star schema** places a fact table at the center, joined to descriptive dimensions. A **snowflake schema** normalizes parts of those dimensions into additional tables.
+A sales report needs measures such as quantity and revenue alongside context such as product category and customer region. A **star schema** keeps the fact table at the center and joins it to descriptive dimensions. A **snowflake schema** takes some of those dimensions and normalizes them into additional tables. The choice changes how that context is maintained and how many joins a consumer must understand.
 
 ```text
 Star:       fact_sales -> dim_product(category_name, department_name)
@@ -227,7 +227,7 @@ A **role-playing dimension** is one logical dimension used for several roles. `d
 
 ### Data Vault 2.0: Hubs, Links, and Satellites
 
-Data Vault 2.0 includes modeling, architecture, and delivery practices. Its central modeling separation is:
+When several sources disagree about a customer or change at different times, it helps to separate identity, relationships, and descriptive history. That separation is central to Data Vault's modeling approach. **Data Vault 2.0** also includes architecture and delivery practices; its core modeling objects divide the work as follows:
 
 | Object | Stores | Store example |
 | --- | --- | --- |
@@ -311,7 +311,7 @@ Use consistent timezones, precise boundary rules, and nonoverlapping intervals p
 
 ### ETL/ELT pipelines and incremental loading
 
-A production pipeline has more than a transformation query: extraction boundaries, durable landing, validation, identity resolution, target publication, progress tracking, and recovery.
+The transformation query is only one part of getting orders into a warehouse. You also need to define extraction boundaries, land data durably, validate it, resolve identities, publish the target, record progress, and recover incomplete work. Those boundaries determine whether a pipeline remains correct when a run fails halfway through.
 
 An incremental load processes a bounded change set instead of rebuilding all history. A useful batch protocol is:
 
@@ -404,7 +404,7 @@ Track input, accepted, rejected, duplicate, inserted, updated, and deleted count
 
 ### Columnar storage, compression, and encoding
 
-Columnar storage groups values from the same column, so a query reading four columns can avoid decoding the other columns. Similar values also compress well.
+A revenue report may read four columns from a table with dozens. **Columnar storage** groups values from the same column, allowing the engine to avoid decoding the rest. Values stored together also tend to share patterns that compress well. Encoding and compression exploit those patterns in different ways:
 
 | Technique | Idea | Useful pattern |
 | --- | --- | --- |
@@ -474,7 +474,7 @@ Bad estimates can select the wrong build side, broadcast too much data, or join 
 
 ### MPP execution, distribution, and shuffling
 
-A distributed query typically performs local scans and partial aggregations, exchanges rows, then completes joins or final aggregations. Hash distribution places equal distribution keys together; even or round-robin distribution spreads rows without join-key locality; replication copies selected data to multiple workers.
+To aggregate a large sales table, workers can first scan their local data and calculate partial results. They then exchange the rows needed to finish joins or final aggregations. Data placement shapes that movement: hash distribution brings equal keys together, even or round-robin distribution spreads rows without join-key locality, and replication places selected copies on multiple workers.
 
 **Shuffle** redistributes intermediate data across the network. It consumes serialization, network, memory, and sometimes disk resources. Reducing rows and columns before an exchange can save more than increasing compute size. Physical colocation can avoid some movement, but only when the engine recognizes compatible distributions.
 
@@ -536,7 +536,7 @@ Under compute-time pricing, doubling compute but halving runtime can leave compu
 
 ### Data quality dimensions and testing
 
-[Data quality and observability](../quality-and-governance/data-quality.md) owns quality definitions, monitoring, reconciliation, and publication gates. [Data platform testing](../quality-and-governance/testing.md) owns test levels, fixtures, and failure injection. Apply them to the warehouse's declared grain and history rules.
+A warehouse test becomes meaningful when it protects the table's promised grain and history. The broader methods live in [Data quality and observability](../quality-and-governance/data-quality.md), covering definitions, monitoring, reconciliation, and publication gates, and [Data platform testing](../quality-and-governance/testing.md), covering test levels, fixtures, and failure injection. Apply them to the row identity and historical behavior the warehouse promises.
 
 For a fact table at one row per source order line:
 
@@ -567,9 +567,9 @@ Follow the [retention and deletion lifecycle](../quality-and-governance/governan
 
 ### Snowflake, BigQuery, and Redshift architectures
 
-Use [Snowflake](../cloud-and-platforms/snowflake.md), [BigQuery in GCP](../cloud-and-platforms/gcp.md#3-bigquery-architecture--internals), and [Redshift in AWS](../cloud-and-platforms/aws.md#5-data-warehousing--analytics) for product architecture and operations.
+Once the logical model is clear, compare how the candidate platforms would execute its workload. Query mix, updates, concurrency, isolation, and measured cost matter more than a list of feature names. The product guides cover the relevant architecture and operations: [Snowflake](../cloud-and-platforms/snowflake.md), [BigQuery in GCP](../cloud-and-platforms/gcp.md#3-bigquery-architecture--internals), and [Redshift in AWS](../cloud-and-platforms/aws.md#5-data-warehousing--analytics).
 
-For warehouse selection, compare query mix, update patterns, concurrency, workload isolation, and measured cost. Verify platform-specific SQL syntax, constraint enforcement, and transaction scope before implementing the model.
+Before implementing the model, verify the platform's SQL syntax, constraint enforcement, and transaction scope.
 
 ### dbt: models, materializations, tests, and snapshots
 
@@ -623,7 +623,7 @@ A warehouse may query these tables externally, manage them natively, or ingest t
 
 ### Historical corrections and restatements
 
-A **correction** changes an erroneous historical assertion. A **restatement** republishes a derived result using corrected data or rules. A business reversal, such as a refund, can be a new event rather than an overwrite; accounting and reporting requirements determine the representation.
+Suppose yesterday's revenue used an incorrect exchange rate. Fixing the historical assertion is a **correction**; republishing the affected report from corrected data or rules is a **restatement**. A refund raises a different modeling question: it may be a new business event rather than an overwrite of the original sale. Accounting and reporting requirements determine which representation is appropriate.
 
 A controlled restatement process:
 
@@ -717,6 +717,8 @@ Enforce trusted tenant identity, scoped keys, and least privilege. Route workloa
 ## 10. Interview Practice
 
 ### A structure for architecture answers
+
+Start a warehouse design answer with a report someone needs to trust. Then explain what one fact row represents, how its history is preserved, and how the result reaches consumers. This sequence helps connect architecture choices to the business outcome instead of turning the answer into a catalog of technologies.
 
 1. **Clarify requirements:** business questions, sources, scale, latency, history, sensitivity, and budget.
 2. **Declare grain and identity:** what each record means and how changes are ordered.

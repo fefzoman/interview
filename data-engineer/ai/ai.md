@@ -1,6 +1,6 @@
 # AI Data Engineering: Data Engineer Interview Guide
 
-AI data engineering builds the pipelines, indexes, metadata, and controls that let AI systems use reliable data. In an interview, connect each model or framework choice to data freshness, retrieval quality, permissions, failure recovery, latency, and cost.
+A catalog assistant can produce a fluent answer about the wrong table—or cite a runbook its user should never have been allowed to read. Making the assistant useful takes dependable source pipelines, searchable indexes, metadata, and enforced access boundaries. That is the data engineering behind AI. This guide follows the evidence from source ingestion to retrieval, generation, and controlled tool use.
 
 **Scope:** Platform-neutral concepts and production design trade-offs. Framework descriptions follow their official documentation; APIs and capabilities depend on the installed versions and integrations. Numbers below illustrate sizing and evaluation rather than prescribe production settings. This guide contains no executable application or provider-specific pricing.
 
@@ -21,7 +21,7 @@ AI data engineering builds the pipelines, indexes, metadata, and controls that l
 
 ### What an LLM learns
 
-A **large language model**, or LLM, learns statistical patterns from training data. Many generative LLMs use a decoder-only Transformer trained to predict the next token from preceding tokens. Repeated next-token prediction generates a response; it does not perform an authoritative database lookup.
+Ask a model who owns a dataset and it may produce a convincing name without consulting the catalog. A **large language model (LLM)** learns statistical patterns from training data. Many generative LLMs use a decoder-only Transformer trained to predict the next token from preceding tokens; repeating that prediction generates a response. That process does not itself perform an authoritative database lookup.
 
 **Self-attention** lets a token's representation depend on other tokens. A causal mask prevents a decoder from attending to future tokens during next-token training. Positional information represents token order. The Transformer introduced attention-based sequence modeling; modern model architectures vary. [Attention Is All You Need](https://arxiv.org/abs/1706.03762).
 
@@ -88,7 +88,7 @@ RAG and fine-tuning can be combined. Fine-tuning is not a dependable replacement
 
 ### End-to-end architecture
 
-**Retrieval-augmented generation**, or RAG, retrieves external evidence and supplies it to a generator. Retrieval can use keyword search, vectors, structured queries, or graphs. A vector database is one implementation option. The original RAG work combined a retriever with a generative model for knowledge-intensive tasks. [RAG paper](https://arxiv.org/abs/2005.11401).
+If the assistant needs today's metric definition, the relevant evidence must reach it at answer time. **Retrieval-augmented generation (RAG)** retrieves external evidence and supplies it to a generator. Retrieval may use keywords, vectors, structured queries, or graphs, so a vector database is one option rather than a prerequisite. The original RAG work combined a retriever and a generative model for knowledge-intensive tasks. [RAG paper](https://arxiv.org/abs/2005.11401).
 
 ```text
 Ingestion:
@@ -178,7 +178,7 @@ Start with a measurable retrieval baseline. Add a stage when it resolves an obse
 
 ### Vector search versus a vector database
 
-**Vector search** ranks items by a vector similarity or distance. A **vector database** additionally manages records, metadata, persistence, filtering, updates, and operational behavior, with capabilities varying by product.
+Finding nearby embeddings is only part of serving a searchable corpus. **Vector search** ranks items by vector similarity or distance. A **vector database** also manages records, metadata, persistence, filtering, updates, and operational behavior, with the exact capabilities varying by product. Separate the ranking algorithm from those database responsibilities when choosing an implementation.
 
 Faiss is a vector search library with several index families; it does not by itself supply a complete distributed database service. A relational database with vector support may be sufficient when data volume, permissions, joins, and operational needs fit. [Faiss documentation](https://faiss.ai/).
 
@@ -245,7 +245,7 @@ Track recall and latency during concurrent writes, compaction, deletes, and rebu
 
 ### Lexical and dense retrieval
 
-**Lexical retrieval** uses terms and an inverted index. BM25 combines term frequency, inverse document frequency, and document-length normalization. It works well for identifiers and distinctive terms when tokenization preserves them; arbitrary exact identifiers may need keyword fields or explicit exact-match lookup.
+A question containing an exact table name has different retrieval needs from a paraphrase of its business purpose. **Lexical retrieval** uses terms and an inverted index; BM25 combines term frequency, inverse document frequency, and document-length normalization. It can work well for distinctive terms and identifiers when tokenization preserves them. Arbitrary exact identifiers may still require keyword fields or explicit exact-match lookup.
 
 **Dense retrieval** searches embeddings and can match paraphrases such as “who maintains the sales pipeline?” against “sales workflow owner.” It may struggle with rare codes, nearly identical names, negation, or exact constraints.
 
@@ -314,7 +314,7 @@ Compare ANN results against exact vector neighbors using the same filters, metri
 
 ### Knowledge graph fundamentals
 
-A **knowledge graph** represents entities and relationships. A property graph attaches properties to nodes and edges; RDF represents statements as subject-predicate-object triples, with additional mechanisms for richer context.
+To answer which dashboards are affected by a failed model, the assistant needs relationships as well as document text. A **knowledge graph** represents entities and their connections. A property graph attaches properties to nodes and edges; RDF represents statements as subject-predicate-object triples, with additional mechanisms for richer context. Either approach needs trustworthy identities and relationships behind the graph.
 
 For a data platform:
 
@@ -372,6 +372,8 @@ Evaluate entity linking, relationship correctness, path completeness, answer sup
 ## 6. LangChain, LangGraph, LlamaIndex, and MCP
 
 ### What problem each tool solves
+
+A framework can save integration work, but first identify the part you need help with: model calls, ingestion and retrieval, stateful orchestration, or communication with external capabilities. The tools below address overlapping parts of that path. Their abstractions do not remove the system's responsibility for data quality, permissions, or correct external effects.
 
 | Tool or protocol | Main role | Responsibility it does not remove |
 | --- | --- | --- |
@@ -432,7 +434,7 @@ Use narrowly scoped tools instead of a generic shell or unrestricted SQL executo
 
 ### Agent versus deterministic workflow
 
-An **AI agent** uses model decisions to select actions, tools, or subsequent steps toward a task. A deterministic workflow has predefined control flow. Many reliable systems combine a fixed outer workflow with model-driven steps inside bounded stages.
+An assistant that diagnoses a failure may choose its next query from what it has already learned. That model-directed choice is characteristic of an **AI agent**, which selects actions, tools, or subsequent steps toward a task. A deterministic workflow instead defines the control flow in advance. Many reliable designs combine a fixed outer workflow with model-driven decisions inside bounded stages.
 
 Define the objective, available tools, allowed data, stopping conditions, and success checks. Bound iterations, elapsed time, token spend, queries, and tool calls. A model's statement that the job is complete is not a success criterion.
 
@@ -499,7 +501,7 @@ For mutating tools, use transaction boundaries or idempotency keys where support
 
 ### Evaluate components and end-to-end behavior
 
-Separate retrieval, evidence selection, generation, and tool execution. This makes failures actionable.
+When an assistant gives a wrong answer, changing the prompt may miss the cause: the correct document might never have reached the index or retrieval candidates. Evaluate ingestion, retrieval, evidence selection, generation, and tool execution separately, then test their combined behavior. That separation makes a failed result something you can investigate and improve.
 
 | Layer | What to evaluate | Example failure |
 | --- | --- | --- |

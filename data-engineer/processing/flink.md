@@ -1,6 +1,6 @@
 # Apache Flink & Stream Processing: Data Engineer Interview Guide
 
-Apache Flink is a distributed engine for stateful computation over bounded and unbounded streams. A streaming job continuously consumes records, updates state, and produces results. For interviews, explain how records move through the job, how event time advances, and how state and external outputs recover after failure.
+A five-minute revenue total sounds simple until an order arrives ten minutes late or a worker fails halfway through an update. Flink handles this kind of ongoing, stateful computation over bounded and unbounded streams. To understand the result it produces, follow three things together: the records, the progress of event time, and the state that must survive failure.
 
 **Reference baseline:** Apache Flink 2.2, using the established Java DataStream API and Table API/SQL. This is an explicit documentation baseline, not a claim about the latest release. DataStream API V2 and connector releases have their own compatibility considerations. Examples are illustrative fragments, not complete applications. [Flink documentation](https://nightlies.apache.org/flink/flink-docs-release-2.2/).
 
@@ -19,6 +19,8 @@ Apache Flink is a distributed engine for stateful computation over bounded and u
 ## 1. Architecture: JobManager, TaskManagers, and Slots
 
 ### Control plane and workers
+
+A Flink job has two kinds of work: coordinating execution and processing the stream itself. Records normally travel between TaskManagers; coordinating services schedule that work and organize recovery. The roles below explain which component to inspect when a job cannot start, a task fails, or checkpoints stop completing.
 
 | Component | Responsibility |
 | --- | --- |
@@ -55,6 +57,8 @@ Slots reserve a share of managed memory; a slot is neither a CPU core nor a dedi
 ## 2. DataStream API, Table API, and Flink SQL
 
 ### Choosing an API
+
+You can express a revenue aggregation as a continuous SQL query or build a custom event-handling application. Both run on Flink, but they expose different levels of control. Choose the API around the operation you need to describe, especially whether you need direct access to keyed state and timers.
 
 | API | Model | Typical use |
 | --- | --- | --- |
@@ -122,6 +126,8 @@ Results may contain inserts, updates, and deletes. An append-only sink cannot ac
 
 ### Two clocks
 
+An order can be created at `10:02` and reach the pipeline at `10:07`. Should it count toward the interval when the customer placed it or the interval when a worker received it? That choice separates event time from processing time and determines how delays and replay affect the answer.
+
 | Clock | Meaning | Consequence |
 | --- | --- | --- |
 | Event time | When the event occurred, according to its assigned timestamp | Supports business-time windows despite transport delays |
@@ -154,6 +160,8 @@ Idle-source detection excludes an input after configured inactivity. When it res
 ## 4. Windows, Triggers, and Allowed Lateness
 
 ### Assigning records to windows
+
+Before calculating a total over a stream, decide which records belong together. A fixed reporting interval, a rolling view of recent activity, and a browsing session each imply a different window. That membership rule affects not only the answer but also how much state the job must retain.
 
 | Window | Membership | Example |
 | --- | --- | --- |
@@ -201,7 +209,7 @@ DataStream custom triggers, allowed lateness, and side outputs are explicit APIs
 
 ### Why state exists
 
-A stateless filter can decide from one event. Counting events per customer, joining streams, deduplicating IDs, or detecting a sequence requires information from earlier records. Flink-managed state makes that information part of checkpoint and restore operations. An ordinary mutable field is not automatically recoverable managed state.
+A filter can often decide what to do from one event. A running customer count cannot: it needs to remember earlier events, as do stream joins, deduplication, and sequence detection. **Flink-managed state** makes that memory part of checkpoint and restore operations. Keeping a value in an ordinary mutable field does not automatically make it recoverable.
 
 After `keyBy(customer_id)`, keyed state is scoped to the current key. An operator subtask can own many customers, while each customer belongs to one subtask for that keyed operator. State updates are local to the owner; Flink redistributes the ownership when parallelism changes. [Stateful stream processing](https://nightlies.apache.org/flink/flink-docs-release-2.2/docs/concepts/stateful-stream-processing/).
 
@@ -246,7 +254,7 @@ Keep **state backend** and **checkpoint storage** separate: the backend manages 
 
 ### What a checkpoint captures
 
-A checkpoint records a consistent recovery position across source progress, managed operator state, and participating sink state. Unaligned checkpoints also capture in-flight channel data. Snapshots must be available after worker failure, and sources must retain enough history to replay from the recorded position.
+If a worker fails after processing several orders, restoring its totals without restoring the matching input position can produce a wrong answer. A **checkpoint** captures a consistent recovery position across source progress, managed operator state, and participating sink state. Unaligned checkpoints also capture in-flight channel data. The snapshots must survive worker failure, and the source must retain enough history to replay from that position.
 
 Checkpointing is disabled by default in a plain DataStream environment. Enabling it is necessary but insufficient: configure durable storage, recovery behavior, timeouts, and source/sink support. A checkpoint does not copy an entire Kafka topic or provide infinite replay retention. [Checkpointing requirements and configuration](https://nightlies.apache.org/flink/flink-docs-release-2.2/docs/dev/datastream/fault-tolerance/checkpointing/).
 
@@ -300,6 +308,8 @@ Assign stable operator UIDs, preserve state descriptor names, and check serializ
 
 ### Define the boundary of the guarantee
 
+After restoring a checkpoint, Flink may execute some input records again. The question is whether the repeated execution changes the committed result. Separate the guarantee for managed state from the guarantee for an external destination: a correct state snapshot alone cannot make an arbitrary external write atomic.
+
 | Guarantee | Failure behavior |
 | --- | --- |
 | At-most-once | Records can be lost; failed attempts are not retried in a way that duplicates them |
@@ -341,7 +351,7 @@ An idempotent final row does not automatically deduplicate database triggers, au
 
 ### How backpressure propagates
 
-When downstream work cannot consume records fast enough, output buffers fill and upstream tasks must wait. Pressure propagates toward the source. Input backlog can then grow in Kafka or another retained source.
+Suppose a database sink slows down while incoming orders continue at the same rate. Its output buffers fill, so upstream tasks have to wait; that pressure can travel back through the job until input backlog grows in Kafka or another retained source. This is **backpressure**, and following its direction helps distinguish the bottleneck from the tasks waiting behind it.
 
 ```text
 records:       source -> parse -> aggregate -> slow database sink
@@ -395,6 +405,8 @@ Adding TaskManagers does not automatically change every running job's parallelis
 ## 9. Interview Questions and Review Checklist
 
 ### Questions to practice aloud
+
+Practice by explaining a job whose windows stopped emitting or whose throughput did not improve after adding workers. A useful answer follows the relevant boundary—watermark progress, state ownership, checkpoint recovery, or sink capacity—rather than naming a setting in isolation. The questions below give you concrete cases to work through.
 
 | Question | What a strong answer covers |
 | --- | --- |

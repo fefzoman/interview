@@ -1,6 +1,6 @@
 # Data Replication: Data Engineer Interview Guide
 
-Data replication maintains copies of data across systems. For interviews, explain how the initial state is established, how subsequent changes are ordered and applied, what happens during failures, and how you prove the copies are correct.
+Copying a table once is a transfer. Keeping that copy useful while the source continues to change is a coordination problem. You need a starting point, an ordered account of later changes, and a recovery path when either side fails. This guide follows that journey from the first snapshot to a destination you can validate and, when needed, cut over to.
 
 This guide covers database replicas and analytical replication pipelines. Examples are illustrative, rather than production configurations. Product capabilities depend on the database, connector, destination, version, and settings; verify those together before promising a guarantee.
 
@@ -20,6 +20,8 @@ This guide covers database replicas and analytical replication pipelines. Exampl
 ## 1. Fundamentals & Architecture
 
 ### Replication vs. synchronization vs. migration
+
+Before designing the copy, ask what it is for. A read replica, two applications exchanging customer updates, and a database migration may all move the same rows, yet they need different ownership and completion rules. The terms below help separate those goals.
 
 | Term | Purpose | Typical example |
 | --- | --- | --- |
@@ -84,7 +86,7 @@ A connector can pull a log stream and push decoded events to Kafka. These dimens
 
 ### Log-based CDC: WAL, binlog, and redo logs
 
-Databases write logs to support recovery and replication. CDC readers interpret those logs to reconstruct changes, identify transactions, and establish resume positions.
+A database already records changes so it can recover from a crash or maintain replicas. **Log-based CDC** uses that record of work to reconstruct changes, identify their transactions, and establish positions from which capture can resume. The source's log format and configuration determine what a reader can recover.
 
 | Database | Relevant mechanism | Important preparation |
 | --- | --- | --- |
@@ -157,7 +159,7 @@ DMS full-load-plus-CDC processing includes table loading, cached changes, and on
 
 ### Strong vs. eventual consistency
 
-**Strong consistency** needs a precise definition. In replication discussions it often means linearizable operations: after a write completes, a later read sees that write or a newer one. Serializable transactions describe a different property and are not automatically linearizable.
+After a customer changes an address, must the next read from a replica show it? That question needs a precise consistency contract. In replication discussions, **strong consistency** often means linearizable operations: a read begun after a completed write sees that write or a newer one. Serializable transactions describe a different property and are not automatically linearizable.
 
 **Eventual consistency** means replicas converge after updates stop, assuming delivery and conflict resolution continue successfully. It does not promise a maximum stale-read interval. A freshness SLO adds a measurable bound or percentile target under defined conditions.
 
@@ -233,7 +235,7 @@ Split-brain occurs when competing nodes both behave as the authoritative writer.
 
 ### Consistent snapshots and MVCC
 
-Multi-version concurrency control (MVCC) lets readers see a stable version while writers continue. A consistent snapshot should represent the selected data at one logical visibility boundary, rather than a mixture of independently timed table scans.
+A long-running copy can otherwise combine yesterday's customers with today's orders. **Multi-version concurrency control (MVCC)** lets a reader see a stable version while writers continue. For replication, a consistent snapshot should put the selected data at one logical visibility boundary, rather than stitch together independently timed table scans.
 
 An exported/shared snapshot can let parallel readers use the same boundary where the database supports it. Merely starting several repeatable-read transactions does not give them the same snapshot. A replica used for extraction must also support alignment between its visible state and the CDC starting position.
 
@@ -301,7 +303,7 @@ Define rollback before cutover. Once new writes reach the destination, switching
 
 ### Database → Database replication
 
-Native replication often fits high availability and read scaling within the same database family. Logical tools support selective or heterogeneous replication, but type conversion and destination apply can change behavior.
+The destination's purpose helps determine the replication path. For high availability or read scaling within one database family, native replication often fits well. For selected tables or a different database engine, logical tools may be more suitable. In either case, check what the destination actually applies: type conversion and apply behavior can change the result.
 
 Check indexes needed for updates/deletes, key uniqueness, foreign keys, generated values, sequences, triggers, and stored procedures. Applying replicated changes through ordinary writes can fire destination side effects or create replication loops. Configure those behaviors deliberately rather than disabling all controls indiscriminately.
 
@@ -370,7 +372,7 @@ Table CDC describes storage changes; outbox events can describe business intent,
 
 ### DDL propagation and schema drift
 
-DDL propagation means applying schema changes downstream. Schema drift means the observed source schema has diverged from an expected schema or contract. Detecting a changed schema, decoding new records, and altering a destination are separate capabilities.
+A source team adds a column, but the destination still rejects the next record. Detecting the change did not make every part of the pipeline compatible. **DDL propagation** applies schema changes downstream; **schema drift** is divergence from an expected schema or contract. Detecting a schema change, decoding the new records, and altering the destination are three separate capabilities.
 
 Classify changes before rollout: adding an optional column, widening a type, renaming or dropping a column, changing a key, or changing a field's meaning. Use an expand-and-contract rollout where possible: make readers and destination compatible, introduce the source change, backfill if needed, then retire old fields.
 
@@ -426,7 +428,7 @@ Filter changes carefully. If a row changes from `region = 'EU'` to `region = 'US
 
 ### Throughput, latency, and lag
 
-Throughput is work per unit time; latency is elapsed time for an individual change; lag is outstanding progress relative to the source. Increasing batch size may improve throughput while increasing latency.
+A replication pipeline may handle a large volume and still fall further behind every minute. To see why, distinguish **throughput**, or work per unit time, from **latency**, the elapsed time for one change, and **lag**, the outstanding progress relative to the source. Larger batches may improve throughput while making individual changes wait longer.
 
 If incoming rate is `lambda` and sustainable apply rate is `mu`, backlog drains only when `mu > lambda`. Under a roughly steady workload:
 
@@ -474,7 +476,7 @@ For hot tables, identify whether the bottleneck is source capture, one partition
 
 ### Checkpointing, offsets, and LSN tracking
 
-A checkpoint records durable progress plus the state needed to resume. Track source cursor, snapshot generation/completion, broker positions, destination progress, and necessary decoding/schema state as applicable.
+After a restart, the pipeline needs more than the last row it happened to read. A **checkpoint** must describe durable progress and the state required to resume safely. Depending on the path, that can include the source cursor, snapshot generation and completion, broker positions, destination progress, and decoding or schema state.
 
 There can be several distinct frontiers: read from source, durably published to transport, applied to destination, and visible to queries. Acknowledge source progress only when the captured data is recoverable from the next durable stage. A destination checkpoint must not claim unapplied records.
 
@@ -526,7 +528,7 @@ Resnapshotting restores a baseline, but it can be expensive and does not restore
 
 ### Schema parity and row-count validation
 
-Start with schema: required tables and columns, data types, nullability, keys, expected mappings, and intentionally omitted objects. Heterogeneous targets need semantic parity, not necessarily identical SQL type names.
+Before comparing row values, establish whether the source and destination represent the same dataset. Check the required tables and columns, data types, nullability, keys, expected mappings, and intentional omissions. A heterogeneous destination may use different SQL type names; what matters is whether the types preserve the intended meaning.
 
 Counts are a cheap first check, but equal counts can hide one missing row and one extra row. Run comparisons at an aligned snapshot or commit boundary; comparing a changing source with a lagging destination produces false positives and can conceal real differences.
 
@@ -581,7 +583,7 @@ Repairs should use the authoritative source at a defined boundary and the normal
 
 ### PostgreSQL logical replication, MySQL binlog, and Oracle redo
 
-For PostgreSQL, explain publication/subscription or logical decoding, replication slots, replica identity, retained WAL, and the difference from physical streaming replication. Native logical replication requires separate DDL coordination and sequence preparation before a writable cutover. [PostgreSQL logical replication restrictions](https://www.postgresql.org/docs/18/logical-replication-restrictions.html).
+A useful way to ground a PostgreSQL replication discussion is to follow an update from WAL to a readable destination row. Explain publication/subscription or logical decoding, the replication slot and resume position, replica identity, retained WAL, and how this differs from physical streaming replication. Before making a logical replica writable at cutover, separately coordinate DDL and prepare sequences. [PostgreSQL logical replication restrictions](https://www.postgresql.org/docs/18/logical-replication-restrictions.html).
 
 For MySQL, explain row-based binlog capture, row image requirements, binlog positions versus GTIDs, expiration, and the continuity checks required after source failover. Statement-based replication can depend on execution context and determinism. [MySQL replication formats](https://dev.mysql.com/doc/refman/8.4/en/replication-formats.html).
 

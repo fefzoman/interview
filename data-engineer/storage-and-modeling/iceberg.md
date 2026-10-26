@@ -2,7 +2,7 @@
 
 Documentation reviewed: 2026-10-21. Engine capabilities can change between releases.
 
-Iceberg is an open table format that gives files in a data lake a transactional table structure. It defines which files belong to a table, how readers find them, and how writers publish a consistent new state. Spark, Flink, Trino, and other engines execute the work. [Iceberg introduction](https://iceberg.apache.org/docs/latest/)
+Imagine a job writes new Parquet files, then fails before publishing its result. Which files should a reader treat as part of the table? Iceberg answers that question by adding a transactional table structure to lake files: it defines membership, helps readers find the right files, and lets writers publish a consistent new state. Spark, Flink, Trino, and other engines still execute the work. [Iceberg introduction](https://iceberg.apache.org/docs/latest/)
 
 **A useful interview answer:** “Parquet describes a file; Iceberg describes a table made from files. Iceberg combines versioned metadata, snapshots, and atomic commits to support reliable writes, schema and partition evolution, and efficient reads.”
 
@@ -24,6 +24,8 @@ SQL examples use **Spark SQL with Iceberg SQL extensions and a configured catalo
 ## 1. Architecture & Metadata
 
 ### Table format vs. file format
+
+A Parquet file can tell a reader how its columns are encoded. It cannot, by itself, tell the reader whether a failed job committed that file or whether a newer job replaced it. Understanding Iceberg starts with separating file contents from table state, then identifying who stores, publishes, and executes that state.
 
 | Layer | Responsibility | Example |
 | --- | --- | --- |
@@ -95,7 +97,7 @@ This avoids discovering table membership through directory listings. The metadat
 
 ### Hidden partitioning and partition transforms
 
-Hidden partitioning derives partition values from ordinary columns. Users filter the original column; they do not need to add a separate partition-date predicate. Iceberg uses the transform to derive a safe partition filter. [Partitioning](https://iceberg.apache.org/docs/latest/partitioning/)
+A user filtering orders by `event_ts` should not have to remember an extra partition-date condition just to make the query efficient. **Hidden partitioning** derives partition values from ordinary columns and lets users filter those original columns. Iceberg uses the declared transform to derive a safe partition filter. The table below uses a day transform over the event timestamp. [Partitioning](https://iceberg.apache.org/docs/latest/partitioning/)
 
 ```sql
 CREATE TABLE lake.interview.orders (
@@ -181,6 +183,8 @@ These are conservative exclusions. Overlapping bounds mean “possibly matches,�
 
 ### ACID transactions and atomic commits
 
+A writer may produce several data and metadata files before it can publish an update. Readers need a coherent table state throughout that work, and competing writers need a safe way to publish their changes. Iceberg's transaction guarantees describe that table boundary; the catalog and storage implementation are part of making it work.
+
 | Property | Meaning for an Iceberg table |
 | --- | --- |
 | Atomicity | A committed state exposes all changes in the operation together |
@@ -235,6 +239,8 @@ Retry limits and backoff help transient catalog contention. They do not make a s
 ## 4. Read & Write Operations
 
 ### Append, overwrite, DELETE, UPDATE, and MERGE
+
+Adding new orders and rebuilding yesterday's orders sound similar until the input is empty or contains duplicate keys. Each write operation defines a different scope of change. Choose it by the intended table effect, then verify the engine's overwrite, matching, and concurrency behavior.
 
 | Operation | Logical effect | Important detail |
 | --- | --- | --- |
@@ -323,7 +329,7 @@ Distribution does not guarantee a precise file count or target size. Fanout can 
 
 ### Snapshot lifecycle and lineage
 
-A data-changing commit normally creates a snapshot with a parent. Branching creates multiple lineages, and rollback changes which snapshot is current. Snapshot IDs identify states; v2/v3 sequence numbers order table changes and support delete applicability.
+To ask what a table looked like before the latest correction, you need an identity for its earlier state. A data-changing commit normally creates a **snapshot** with a parent. Branches can form separate lineages, while rollback changes the current snapshot. Snapshot IDs identify states; the sequence numbers in v2 and v3 order table changes and help determine which deletes apply.
 
 ```text
 S1 --> S2 --> S3        main
@@ -395,6 +401,8 @@ For CDC, distinguish the database's source change log from changes reconstructed
 
 ### Data-file compaction and manifest rewriting
 
+A table can remain correct while becoming expensive to plan or read. Many small data files, fragmented metadata, accumulated delete information, and retained history are different sources of overhead. Maintenance is most useful when it targets the one you have measured; the operations below are not interchangeable cleanup commands.
+
 | Maintenance | Changes | Intended benefit |
 | --- | --- | --- |
 | Data-file rewrite/compaction | Replaces selected data files | Fewer small files, better layout, application of relevant deletes |
@@ -462,7 +470,7 @@ Compare these measurements on the same query and data scope. Compaction will not
 
 ### REST, Hive, Glue, JDBC, and Nessie catalogs
 
-The catalog is part of the table's correctness path. It is more than a searchable list of names.
+Two writers can safely publish to the same table only if they agree on how publication is coordinated. That makes the **catalog** part of the table's correctness path, beyond its role in resolving names. When choosing a catalog, inspect its commit mechanism and the requirements every writer must satisfy.
 
 | Catalog | What it provides | Operational consideration |
 | --- | --- | --- |
@@ -509,7 +517,7 @@ Before enabling a feature, check every required reader and writer for its format
 
 ### Streaming ingestion, CDC, and idempotent writes
 
-Exactly-once delivery, business-key uniqueness, and applying events in source order are separate requirements. An atomic append can still append the same business event twice after a poorly handled retry.
+An append can be atomic and still add the same business event twice after a retry. To design reliable CDC into Iceberg, separate three requirements: delivery guarantees, business-key uniqueness, and applying events in source order. The table commit addresses a publication boundary; the pipeline must still define how replayed and out-of-order changes become the intended rows.
 
 A practical CDC design should define:
 

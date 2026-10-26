@@ -1,6 +1,6 @@
 # Data Quality & Observability: Data Engineer Interview Guide
 
-Data quality asks whether data is fit for a particular use. Data observability collects signals about data and pipelines so that teams can detect problems, understand their impact, and restore trustworthy data. A successful job can still publish incorrect data; a failed job can leave yesterday's valid data available but stale.
+The pipeline is green, but finance says yesterday's revenue is wrong. That is where execution monitoring stops being enough. **Data quality** asks whether the data is fit for its intended use; **data observability** gathers the signals needed to detect a problem, understand its impact, and restore trust. A completed job can publish bad numbers, while a failed job can leave an older, valid result available but stale.
 
 In an interview, connect each check to a business risk, a clearly defined measurement, an owner, and a response. A dashboard full of metrics is useful only if someone can act on it.
 
@@ -21,6 +21,8 @@ In an interview, connect each check to a business risk, a clearly defined measur
 ## 1. Data Quality Dimensions
 
 ### Completeness, accuracy, consistency, and validity
+
+Before adding a check, name the kind of failure you want to catch. A missing order, an incorrect amount, conflicting totals, and an invalid status are all quality problems, but they require different evidence. The dimensions below turn a vague concern about trust into a measurable question.
 
 | Dimension | Question | Orders example | Typical evidence |
 | --- | --- | --- | --- |
@@ -63,6 +65,8 @@ Cross-field rules catch problems that individual-column checks miss: `shipped_at
 ## 2. Great Expectations, Soda, and dbt Tests
 
 ### What each tool contributes
+
+Once a rule is clear, you need a way to execute it, retain the result, and act on failure. Great Expectations, Soda, and dbt offer overlapping approaches to that work. Choose around the execution environment and ownership of the rule, rather than expecting a tool to supply the business definition.
 
 | Tool | Main approach | Useful context | Operational consideration |
 | --- | --- | --- | --- |
@@ -118,7 +122,7 @@ Record the dataset, partition or batch, check identifier, check version, observe
 
 ### Profiling: discover what is in the data
 
-Profiling summarizes a dataset before choosing rules or investigating changes. Inspect schema, row counts, null rates, distinct counts, duplicate keys, minimum and maximum values, quantiles, string lengths, frequent categories, and relationships between columns.
+Before deciding which values are unusual, find out what the dataset actually contains. **Profiling** summarizes the data to support rule selection and investigation: inspect schema, row counts, null rates, distinct counts, duplicate keys, ranges, quantiles, string lengths, frequent categories, and relationships between columns. The orders query below provides a first look at several of those signals.
 
 ```sql
 select
@@ -181,7 +185,7 @@ Use full checks for critical keys, control totals, and financially material reco
 
 ### Freshness and end-to-end timeliness
 
-Track the clocks separately:
+A table updated one minute ago may contain orders that were already hours late when they arrived. To measure timeliness from the consumer's perspective, distinguish when the event happened, when the source committed it, when ingestion received it, and when validated output became readable:
 
 ```text
 event time:        when the business event occurred
@@ -238,7 +242,7 @@ Measure detection delay and false-alert burden. Repeated unactionable alerts tra
 
 ### Use lineage during an incident
 
-The [governance guide](governance.md#1-data-catalogs-metadata-management-and-lineage) defines lineage levels, design versus runtime lineage, and coverage gaps. Here, use that graph with run IDs, partitions, timestamps, and dataset versions to locate the affected execution.
+When a revenue total changes unexpectedly, lineage helps identify the inputs and transformations that could have contributed. Use the dependency graph together with run IDs, partitions, timestamps, and dataset versions to locate the affected execution. The [governance guide](governance.md#1-data-catalogs-metadata-management-and-lineage) covers lineage levels, design versus runtime lineage, and the coverage gaps to keep in mind.
 
 Keep data dependencies distinct from scheduling dependencies. A task can depend on another task for control flow without consuming its data. Conversely, a shared lookup table can affect a result without an obvious scheduler dependency.
 
@@ -268,6 +272,8 @@ Preserve evidence before reruns overwrite staging data or logs. Record the incid
 ## 6. Data Quality SLAs, SLOs, and SLIs
 
 ### Measurement, objective, and agreement
+
+A promise such as 'orders arrive quickly' leaves both the measurement and the response to failure unclear. First define what users experience, then the target, then any agreement about consequences. SLIs, SLOs, and SLAs describe those separate parts.
 
 | Term | Meaning | Example |
 | --- | --- | --- |
@@ -314,7 +320,7 @@ Assign a producer owner, a consumer contact, escalation, a recovery procedure, a
 
 ### Reconciliation compares equivalent populations
 
-Reconciliation verifies that data agrees across systems or processing stages under an explicit mapping. Establish the same grain, business filters, currency, timezone, cutoff, and snapshot or CDC position before comparing anything.
+A source and a warehouse can disagree simply because you compared different currencies or different points in time. **Reconciliation** checks agreement across systems or stages under an explicit mapping. Before counting or summing, align the grain, business filters, currency, timezone, cutoff, and snapshot or CDC position. Otherwise the comparison cannot tell you whether data is missing.
 
 | Level | What to compare | What it misses |
 | --- | --- | --- |
@@ -409,7 +415,7 @@ Fix the producer, transformation, or rule, then replay with stable identities an
 
 ### OpenLineage: a standard for emitting lineage metadata
 
-OpenLineage defines an event model for describing data processing. Its core entities are a **Job** (a logical process), a **Run** (one execution), and **Datasets** (inputs and outputs). Jobs and datasets use names with namespaces; a run has its own identifier. [OpenLineage object model](https://openlineage.io/docs/spec/object-model/).
+To investigate a failed revenue publication, you need to connect the logical transformation, the particular execution, and its inputs and outputs. OpenLineage defines an event model around those identities: a **Job** is the logical process, a **Run** is one execution, and **Datasets** are its inputs and outputs. Jobs and datasets have names with namespaces; each run has its own identifier. [OpenLineage object model](https://openlineage.io/docs/spec/object-model/).
 
 For example, an orders transformation emits events associating one run of `build_daily_revenue` with its input `orders` and output `daily_revenue`. Run lifecycle events such as start, completion, and failure describe execution state. A stable job identity lets repeated runs be associated with the same process, while distinct run identities distinguish attempts. [OpenLineage run cycle](https://openlineage.io/docs/spec/run-cycle/).
 
@@ -442,7 +448,7 @@ Monitor metadata delivery too. Missing events, inconsistent namespaces, and stal
 
 ### “The pipeline is green, but the dashboard is wrong. What do you check?”
 
-Start with the consumer's metric, filters, timezone, and freshness. Reconcile with the authoritative source at the same cutoff. Trace lineage through stages, checking missing inputs, join fan-out, filter losses, duplicate replay, currency semantics, and BI caches. Job success proves execution completed, not that the result is correct.
+Begin with the number the consumer is questioning: its definition, filters, timezone, and freshness. Compare it with the authoritative source at the same cutoff, then follow lineage through the stages. Look for missing inputs, join fan-out, filter losses, duplicate replay, currency semantics, and stale BI caches. A green job tells you execution completed; the comparison tells you whether it produced the intended result.
 
 ### “Yesterday's order count dropped 35%. Would you block publication?”
 

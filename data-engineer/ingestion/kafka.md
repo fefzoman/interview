@@ -1,6 +1,6 @@
 # Apache Kafka: Data Engineer Interview Guide
 
-Kafka is a distributed event streaming platform. It stores ordered, replicated logs so applications can publish events, process them independently, and replay retained history. For interviews, explain the unit of ordering, where progress is stored, and what happens when a component fails.
+When an order is placed, billing, fulfillment, and analytics may all need the event at different speeds. Kafka lets those applications read independently from ordered, replicated logs and revisit retained history. Understanding it starts with a few practical questions: where is ordering guaranteed, who records progress, and what survives when a producer, consumer, or broker fails?
 
 **Reference baseline:** Apache Kafka 4.1 and the official Java clients unless stated otherwise. This is an explicit documentation baseline, not a claim about the latest release. Client libraries and managed services can have different defaults and feature support. Examples are illustrative; sizing requires workload measurements. Kafka 4.x uses KRaft; ZooKeeper belongs to older deployments. [Kafka introduction](https://kafka.apache.org/41/getting-started/introduction/), [upgrade guide](https://kafka.apache.org/41/getting-started/upgrade/).
 
@@ -19,6 +19,8 @@ Kafka is a distributed event streaming platform. It stores ordered, replicated l
 ## 1. Architecture & Fundamentals
 
 ### Brokers, topics, partitions, and replicas
+
+Follow an order event into Kafka. Its topic gives the stream a name, its partition gives it an ordered position, and replicas keep copies on brokers. Those layers have distinct jobs; separating them makes both scaling and failure behavior easier to reason about.
 
 | Concept | Meaning | Interview implication |
 | --- | --- | --- |
@@ -74,7 +76,7 @@ A majority of controller voters must be available to make metadata progress. Thr
 
 ### Partitioning strategies and message keys
 
-With the default Java partitioning behavior, a non-null key is hashed to choose a partition. Consistent serialized keys and partitioning rules route related events together while the partition count stays fixed. `order_id` is useful when events for one order must be processed in sequence.
+If an order is created, paid, and then cancelled, you may need those events processed in sequence. A message key such as `order_id` gives the producer a way to keep them together. With the default Java behavior, a non-null key is hashed to select a partition; routing stays consistent while the serialized key, partitioning rules, and partition count stay the same.
 
 For records without keys, modern Java producers use batching-oriented sticky/adaptive partition selection rather than promising strict round-robin distribution. An explicit partition overrides normal selection; custom partitioners can implement application rules. Avoid custom routing unless the default cannot meet the requirement.
 
@@ -125,7 +127,7 @@ Retry transient leader/network errors within a bounded delivery budget. Serializ
 
 ### Consumer groups and partition assignment
 
-Consumers subscribing with the same `group.id` share work. Membership changes and partition changes can trigger reassignment. In the classic protocol, client assignment strategies include Range, RoundRobin, Sticky, and CooperativeSticky. Range can distribute multiple topics unevenly; sticky strategies try to reduce partition movement.
+Suppose one analytics consumer cannot keep up with the orders topic. Starting another consumer with the same `group.id` lets the group share partitions, subject to available work and downstream capacity. Membership or partition changes can trigger reassignment. Under the classic protocol, client strategies include Range, RoundRobin, Sticky, and CooperativeSticky: Range can distribute multiple topics unevenly, while sticky strategies try to reduce movement.
 
 More consumers help only if partitions and downstream capacity allow it. An application can add worker concurrency within a consumer, but then must preserve any required per-partition processing order and commit only completed work.
 
@@ -172,7 +174,7 @@ Replay using a separate group or a coordinated seek/reset of the existing group.
 
 ### Append-only logs, segment files, and indexes
 
-Writes append record batches to the active segment. Older segments become candidates for retention or cleaning. Sparse offset indexes map offsets to nearby byte positions, and time indexes help locate offsets by timestamp; reading then scans from the indexed position. They are not indexes for querying arbitrary payload fields.
+Kafka can replay an old event because the record remains in a partition log until cleanup makes it eligible for removal. New record batches append to the active segment; older segments can later be retained or cleaned according to policy. Sparse offset indexes point to nearby byte positions, and time indexes help locate offsets by timestamp. A reader scans from that position—these are navigation aids for the log, not indexes over arbitrary payload fields.
 
 Typical files include `.log`, `.index`, and `.timeindex`. Segment size and roll timing affect file count and retention granularity. “Append-only” describes normal writes; compaction rewrites eligible segments and recovery can truncate divergent tails. [Kafka implementation](https://kafka.apache.org/41/implementation/).
 
@@ -217,7 +219,7 @@ Replication is not a backup: deletion, bad events, and bad retention settings ca
 
 ### At-most-once, at-least-once, and exactly-once
 
-Always name the boundary: producer-to-log delivery, Kafka-to-Kafka processing, or an external business effect.
+A producer retry, a Kafka-to-Kafka transformation, and a payment API call involve different failure boundaries. A guarantee about one does not automatically cover the others. Before using terms such as at-least-once or exactly-once, trace the input, durable effect, and acknowledgment across the particular boundary you mean.
 
 | Semantics | Typical processing arrangement | Crash outcome |
 | --- | --- | --- |
@@ -269,7 +271,7 @@ A dead-letter queue (DLQ) holds events that exceeded a deliberate retry policy o
 
 ### Partition count, throughput, and parallelism
 
-Partitions allow independent appends and consumer assignments, but add metadata, files, replication work, and recovery overhead. Estimate from measured per-partition throughput and consumer processing capacity, then validate failure behavior.
+If consumers need more parallel work, additional partitions can provide independent appends and assignments. They also add metadata, files, replication work, and recovery overhead. Estimate the useful count from measured per-partition throughput and consumer processing capacity, then validate how the system behaves during failure.
 
 For example, if one consumer can durably process 5,000 records/second and input is 30,000 records/second, at least six equally loaded processing slots are needed before headroom. A single hot key can invalidate this estimate. Increasing partition count changes future key routing and cannot be reversed in place; adding brokers alone does not automatically move all existing partitions. [Partition operations](https://kafka.apache.org/41/operations/basic-kafka-operations/).
 
@@ -309,7 +311,7 @@ Reassignment moves partition replicas between brokers; it does not split a hot k
 
 ### Kafka Connect: sources, sinks, workers, and tasks
 
-Kafka Connect runs reusable integration plugins. A **source** reads an external system into Kafka; a **sink** reads Kafka into an external system. A **connector** manages configuration and work splitting; **tasks** perform data movement; **workers** host connectors and tasks.
+Moving records between Kafka and another system does not always need a custom consumer application. **Kafka Connect** runs connectors that integrate with external systems. A connector defines configuration and divides the work; its **tasks** perform the transfer, and **workers** host those connectors and tasks. Keeping those roles separate helps explain what can actually run in parallel.
 
 Distributed workers coordinate and redistribute tasks on failure. `tasks.max` is an upper bound, not a promise of that many useful tasks: source parallelism depends on connector capabilities, and sink parallelism is constrained by input partitions. Distributed Connect persists configuration, status, and source progress in internal Kafka topics.
 
@@ -357,7 +359,7 @@ Choose according to required replay, ordering, throughput, routing, and task sch
 
 ### TLS, SASL, ACLs, authentication, and authorization
 
-**Authentication** establishes identity; **authorization** controls actions. TLS encrypts connections and can authenticate clients through mutual TLS. SASL supports mechanisms such as SCRAM, Kerberos, and OAuth-based authentication. SASL alone does not imply encrypted transport; combine it with TLS as appropriate.
+A client that reaches a Kafka listener still needs to prove who it is and receive permission for the operation. **Authentication** establishes identity; **authorization** controls actions. TLS encrypts connections and can authenticate clients with mutual TLS. SASL supports mechanisms such as SCRAM, Kerberos, and OAuth-based authentication, but SASL alone does not encrypt transport; combine it with TLS as appropriate.
 
 ACLs grant operations on resources such as topics, groups, and transactional IDs. A consumer needs topic and group access; a transactional producer also needs appropriate transaction permissions. Use separate service identities and least privilege. Secure inter-broker and controller communication as well as client listeners.
 
@@ -404,7 +406,7 @@ Define recovery point objective (acceptable data loss) and recovery time objecti
 
 ### Rebalancing storms and static membership
 
-A rebalance storm repeatedly interrupts useful processing. Common causes include consumer crashes, rolling deployments, network instability, coordinator pressure, and batches exceeding the poll interval. Correlate rebalance timestamps with processing duration and deployment events before changing timeouts.
+A consumer group may have enough capacity on paper yet spend much of its time stopping and redistributing partitions. That is a **rebalance storm**. Crashes, rolling deployments, unstable networks, coordinator pressure, and batches that exceed the poll interval can all contribute. Match rebalance timestamps to processing duration and deployment events before changing timeouts.
 
 Static membership uses a stable, unique `group.instance.id` per logical consumer instance. It can reduce reassignment during short restarts, but duplicates are fenced and failed members can take longer to replace. It does not prevent all rebalances. Cooperative assignment or the newer consumer protocol reduces movement/interruption but does not fix an overloaded consumer. [Static membership configuration](https://kafka.apache.org/41/configuration/consumer-configs/), [rebalance protocol](https://kafka.apache.org/41/operations/consumer-rebalance-protocol/).
 

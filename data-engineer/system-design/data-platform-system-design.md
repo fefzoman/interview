@@ -1,6 +1,6 @@
 # Data Platform System Design: Data Engineer Interview Guide
 
-A data platform moves data from operational systems to trustworthy products for analytics, machine learning, and applications. A strong system-design answer explains how the platform meets its latency, correctness, scale, security, recovery, and cost requirements.
+Finance wants a reconciled revenue report every morning. Operations wants changes visible within a minute. Both depend on the same orders, yet they need different freshness and publication guarantees. Designing a data platform means connecting operational sources to trustworthy products for analytics, machine learning, and applications while making those requirements explicit. This guide follows the decisions that turn a diagram into a system you can defend.
 
 **Scope:** Platform-neutral architecture and interview reasoning. Technologies are examples, not a required stack. Product-specific guarantees depend on the deployed version, connectors, configuration, and transaction boundaries. Selected primary documentation was checked on October 25, 2026.
 
@@ -26,7 +26,7 @@ A data platform moves data from operational systems to trustworthy products for 
 
 ### Start with the consumers and requirements
 
-Do not begin by listing products. First establish what the platform must deliver and what failures would mean.
+Begin with the person waiting for the data. What decision will they make, how fresh must the result be, and what would a wrong or missing answer cost them? Those questions establish what the platform must deliver and how it should behave during failure. Product choices become easier to justify once those requirements are clear.
 
 | Area | Questions to ask | Design consequence |
 | --- | --- | --- |
@@ -71,7 +71,7 @@ State assumptions explicitly and revise them when the interviewer adds informati
 
 ### Batch processing
 
-Batch processes a bounded dataset: a daily export, a partition, or a finite range of source changes. A scheduler or data-availability signal starts the computation.
+If finance needs yesterday's reconciled orders by morning, a bounded computation may be enough. **Batch processing** works on a finite dataset, such as a daily export, a partition, or a fixed range of source changes. A scheduler or data-availability signal starts the job; the boundary gives it a defined scope to validate and publish.
 
 **Typical flow:** Extract files or changes → durable landing → transform a bounded range → validate → publish.
 
@@ -163,6 +163,8 @@ Kappa does not require keeping every event forever in a broker. An archive can r
 
 ### Data lake vs. lakehouse vs. warehouse
 
+A design discussion can get stuck on whether the platform is a lake, lakehouse, or warehouse before anyone explains how its tables become reliable. Use the categories to describe capabilities and responsibilities, then check which ones the workload actually needs. File storage, table transactions, and governed analytical serving solve different parts of the problem.
+
 | Architecture | Main idea | Strengths | Responsibilities and limitations |
 | --- | --- | --- | --- |
 | Data lake | Store diverse data in scalable file/object storage | Flexible formats, economical history, broad processing options | Files alone do not provide table transactions, quality, or discoverability |
@@ -209,6 +211,8 @@ An ingestion service can write bronze tables; a processing job can produce silve
 ## 4. Ingestion, Processing, Storage, and Serving
 
 ### A reference flow
+
+Follow an order from the operational source to a dashboard. Along the way, it crosses ingestion, validation, integration, and business modeling boundaries. Each boundary should explain what is durable, what is trusted, and where replay begins. The reference flow below provides a structure for those decisions.
 
 ```mermaid
 flowchart LR
@@ -303,6 +307,8 @@ When several outputs form one report, publishing tables independently can expose
 ## 5. Partitioning, Scalability, and Capacity Planning
 
 ### Different kinds of partitioning
+
+The key that keeps one order's events in sequence may be a poor choice for pruning a year's analytical history. Partitioning has a different job at each layer. Identify the boundary—broker, processor, storage layout, or database distribution—before choosing a key or estimating useful parallelism.
 
 | Type | What it controls | Example |
 | --- | --- | --- |
@@ -404,7 +410,7 @@ Scaling helps only when the bottleneck can use the new capacity. A hot key, seri
 
 ### Name the consistency boundary
 
-“The platform is consistent” is too vague. Ask which reader sees which state and under what failures.
+A dashboard may see a coherent version of one table while combining it with an older version of another. Calling the whole platform 'consistent' hides that distinction. Ask which reader sees which state, across which boundary, and under which failures; then give the guarantee a precise scope.
 
 | Boundary | Relevant guarantee |
 | --- | --- |
@@ -486,7 +492,7 @@ For disaster recovery, test restoring data, metadata, credentials/access, proces
 
 ### Separate security isolation from performance isolation
 
-Multi-tenancy means several customers, teams, or domains share some platform resources. Tenant isolation has several dimensions:
+Two tenants can be unable to read each other's records and still interfere badly when one consumes all the workers. **Multi-tenancy** means customers, teams, or domains share some resources; isolation must therefore cover more than data access. Separate these dimensions when deciding what each tenant can affect:
 
 - **Data:** A tenant cannot read or modify another tenant's records.
 - **Compute:** One workload cannot exhaust all CPU, memory, or execution slots.
@@ -542,7 +548,7 @@ Autoscale on signals that reflect the bottleneck: lag and input rate for ingesti
 
 ### Data contracts: make producer/consumer expectations explicit
 
-Use [data contracts and schema management](../quality-and-governance/data-contracts.md) for the full contract structure and compatibility rules. In a design interview, put the concrete assumptions on the diagram: dataset grain, tenant-scoped keys, change identity, ordering, deletes, replay horizon, freshness target, owner, and permitted uses.
+A source box on a diagram should carry enough information to explain what downstream consumers may rely on: dataset grain, tenant-scoped keys, change identity, ordering, deletes, replay horizon, freshness, ownership, and permitted uses. Those are concrete design assumptions. [Data contracts and schema management](../quality-and-governance/data-contracts.md) covers the full contract structure and compatibility rules behind them.
 
 Do not label the source “exactly once” without explaining the boundary. Similarly, “daily delivery” needs a timezone, deadline, completeness signal, and late-delivery policy.
 
@@ -607,6 +613,8 @@ Alert on user impact, expected missing deliveries, rapidly consuming freshness b
 
 ### Choose capabilities before product names
 
+Once the required behavior is clear, choose the component that can provide it. A retained stream, a batch engine, and a transactional table format belong in a design for different reasons. The examples below connect capabilities to candidates, while leaving room to reuse an existing component that already meets the requirement.
+
 | Requirement | Capability to evaluate | Illustrative options |
 | --- | --- | --- |
 | Durable ordered change stream | Retention, replay, partitioning, producer/consumer guarantees | Kafka or a managed event-stream service |
@@ -670,7 +678,7 @@ A single warm query or a vendor throughput number does not establish platform ca
 
 ### Requirements and assumptions
 
-Use the capacity assumptions from Section 5 and add:
+Now put the pieces together for the commerce platform. Carry forward the capacity assumptions from Section 5, then add the tenant boundaries, consumer deadlines, history, and recovery expectations below. These assumptions define what the worked design must accomplish and which guarantees still require separate agreement.
 
 - 200 tenants with uneven traffic; entity IDs are unique only within a tenant.
 - Order/payment database changes and application events are independent inputs.
@@ -745,6 +753,8 @@ For the one-hour recovery target, budget failure detection, restore, catch-up, v
 ## 11. Interview Practice
 
 ### Questions to rehearse
+
+Rehearse by changing one assumption in your design: a consumer needs fresher data, one tenant dominates traffic, or six months must be rebuilt while live ingestion continues. Explain which boundary changes and what it costs. The questions below help test whether the architecture follows from its requirements.
 
 | Question | What a strong answer includes |
 | --- | --- |

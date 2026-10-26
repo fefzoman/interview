@@ -1,6 +1,6 @@
 # Semantic Layer & Metrics: Data Engineer Interview Guide
 
-A semantic layer translates physical data into business concepts and reusable metric definitions. In interviews, explain what each metric means, which rows it includes, how it aggregates, which joins are safe, and how consumers obtain the same answer.
+Two dashboards can both report revenue and disagree because one includes refunds, uses a different date, or multiplies rows in a join. A semantic layer makes those decisions explicit by translating physical data into business concepts and reusable metric definitions. This guide follows a metric from its business meaning to the joins, aggregation rules, and consumer interfaces that keep its answer consistent.
 
 **Scope:** Platform-neutral fundamentals with dbt Semantic Layer and MetricFlow examples. Product documentation was checked on October 25, 2026. The YAML uses the newer specification supported by dbt v1.12 and dbt v2; older projects use a different structure. Examples are teaching snippets, not a complete runnable dbt project. Hosted features depend on the plan, engine, adapter, and integration. [Specification compatibility](https://docs.getdbt.com/docs/build/latest-metrics-spec).
 
@@ -21,6 +21,8 @@ A semantic layer translates physical data into business concepts and reusable me
 ## 1. Semantic Models, Entities, Measures & Dimensions
 
 ### What the layer does
+
+Cleaning an amount column does not yet define revenue. Once transformations produce dependable facts and dimensions, a semantic layer describes what those datasets mean and which queries are valid. Follow that separation through to the dashboard in the flow below.
 
 ```text
 Operational sources
@@ -73,7 +75,7 @@ A dimension is only valid for a metric if a meaningful relationship exists. Orde
 
 ### A metric is a contract
 
-“Revenue is `SUM(amount)`” leaves most of the business question unanswered. A useful definition specifies:
+Ask two teams to implement `SUM(amount)` and they can still produce different revenue numbers. Which orders qualify? When do refunds count? Which currency and date should apply? A metric definition becomes a useful contract when it answers those questions explicitly:
 
 | Contract field | Example |
 | --- | --- |
@@ -110,6 +112,8 @@ Several metrics can be legitimate: gross bookings, net sales, cash collected, an
 ## 3. dbt Semantic Layer & MetricFlow
 
 ### Responsibilities
+
+A metric request crosses several responsibilities before returning a number. Transformations prepare the rows, definitions describe their meaning, MetricFlow plans the metric SQL, and the warehouse executes it. Separating these roles helps you investigate whether a wrong answer came from the input model, semantic rules, generated query, or consumer request.
 
 | Component | Responsibility |
 | --- | --- |
@@ -195,6 +199,8 @@ When debugging, inspect the generated SQL and its warehouse plan. Correct metada
 
 ### Additive, semi-additive, and non-additive metrics
 
+Daily sales can often be summed into monthly sales, but daily distinct-customer counts cannot be summed into monthly distinct customers. The same person may appear on several days. Before rolling a metric up, identify which dimensions permit addition and which require a different calculation.
+
 | Type | Safe aggregation | Example | Common error |
 | --- | --- | --- | --- |
 | Additive | Sum across compatible dimensions and disjoint periods | Sales in one currency | Summing amounts in mixed currencies |
@@ -266,7 +272,7 @@ Zero means the measurement is known and no qualifying activity occurred. Null ca
 
 ### Conformed dimensions
 
-A conformed dimension uses consistent identity, attributes, and business meaning across facts. Sales and returns can both use the same customer, product, and calendar dimensions.
+Sales and returns can be compared by customer only if both facts agree on who the customer is and what the attributes mean. A **conformed dimension** supplies consistent identity, attributes, and business meaning across facts. Sharing customer, product, and calendar dimensions gives those analyses a common basis.
 
 Conformance requires more than matching column names. Agree on customer identity, country definitions, unknown-member handling, fiscal periods, timezone, and historical interpretation. `country` might mean billing country in one source and shipping country in another.
 
@@ -329,7 +335,7 @@ Many-to-many relationships, such as orders attributed to multiple campaigns, nee
 
 ### Derived metrics
 
-A derived metric applies an expression to other metrics, usually after each input has been aggregated to a compatible result grain.
+Average order value sounds like a simple division, but the sales total and order count must describe compatible populations and periods. A **derived metric** applies an expression to other metrics, usually after each input has been aggregated to a compatible result grain. The formula is only as sound as that agreement.
 
 | Metric | Formula | Required agreement |
 | --- | --- | --- |
@@ -410,7 +416,7 @@ A late correction to an additive daily metric can affect subsequent rolling wind
 
 ### Consistency has several layers
 
-Two consumers agree only when they use the same metric definition, source state, filters, time boundaries, permissions, and refresh state. Matching names alone is insufficient.
+Even a shared metric definition does not guarantee that two dashboards agree. They must also use the same source state, filters, time boundaries, permissions, and refresh state. Consistency therefore needs controls across the definition, data, deployment, and consumption path; a matching metric name is only the beginning.
 
 | Layer | Useful control |
 | --- | --- |
@@ -470,6 +476,8 @@ Enforce authorization at the service/data boundary and protect cached/exported c
 
 ### Integration patterns
 
+A correct metric still has to reach its users at an acceptable speed and freshness. A live query, a warehouse export, and a BI extract place different responsibilities on the serving path. Compare not only query latency but also who refreshes the copy and enforces its permissions.
+
 | Pattern | Benefits | Tradeoff |
 | --- | --- | --- |
 | Live metric query | Uses deployed definitions and current accessible data | Query latency, concurrency, and service availability |
@@ -526,6 +534,8 @@ Measure cold/warm latency, cache hit rate, bytes scanned, warehouse cost, error 
 ## 9. Interview Practice
 
 ### A structure for design answers
+
+For practice, take one disputed revenue number and design the agreement that would resolve it. Name the owner, eligible rows, time basis, and legal aggregations before discussing tools. Then follow the metric to a consumer and explain how you would verify the result.
 
 1. Clarify the business question and name the metric owner.
 2. State the source grain, identity, population, units, and time basis.

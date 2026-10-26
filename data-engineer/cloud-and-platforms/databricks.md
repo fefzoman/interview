@@ -2,7 +2,7 @@
 
 Documentation reviewed: 2026-10-25. Examples and architecture references use Databricks on AWS; core concepts also apply to Azure and Google Cloud. Feature support depends on the runtime, compute product, cloud, region, and table features.
 
-Databricks combines distributed processing, transactional lakehouse tables, governance, and managed data pipelines. In an interview, connect each feature to the problem it solves, its correctness guarantees, and its operational cost.
+A lakehouse pipeline has to do several jobs at once: process large inputs, publish coherent tables, control access, and recover repeatable runs. Databricks brings distributed processing, transactional tables, governance, and managed pipelines into one platform. Understanding the pieces means asking which problem each solves, what it guarantees, and which operating cost remains.
 
 **A useful interview answer:** “Databricks separates durable cloud storage from compute. Delta Lake provides transactional table semantics, Unity Catalog governs access, Spark and Photon execute transformations, and Lakeflow handles ingestion, pipelines, and orchestration. I choose the compute and ingestion pattern from the freshness requirement, recovery needs, and cost per successful run.”
 
@@ -26,7 +26,7 @@ Examples are independent teaching examples, not a deployment script. They assume
 
 ### Control plane vs. compute plane
 
-The **control plane** hosts Databricks-managed services such as the web application and backend coordination. The **compute plane** runs workloads that process data.
+Opening a notebook and running its query involve different parts of Databricks. The **control plane** hosts Databricks-managed services such as the web application and backend coordination; the **compute plane** runs the workloads that process data. That distinction helps explain where work and its supporting services live.
 
 On AWS, classic compute runs in the customer's AWS account. Serverless compute runs in a Databricks-managed compute plane in the workspace's region. Durable table storage is a separate concern: terminating a compute resource does not delete its persisted tables.
 
@@ -103,7 +103,7 @@ Medallion layers are a design pattern, not mandatory product objects. A schema c
 
 ### Table format vs. file format
 
-Parquet describes columnar files. Delta Lake describes how data files, a transaction log, schema, and table features form a transactional table. Reading the directory as raw Parquet bypasses Delta semantics and can return removed records, duplicate versions, or rows masked by deletion vectors. Use a Delta-aware reader.
+A directory can contain both new files and files that a previous update logically removed. Reading all of them as raw Parquet can therefore return the wrong table. Parquet describes columnar files; **Delta Lake** uses data files, a transaction log, schema, and table features to describe a transactional table. Use a Delta-aware reader so removed records, duplicate versions, and rows masked by deletion vectors are interpreted correctly.
 
 Delta Lake is open source; Databricks adds managed services and optimizations. Do not assume every Databricks feature exists in open-source Delta, or that every Delta client supports every table feature. [Delta Lake overview](https://docs.databricks.com/aws/en/delta)
 
@@ -273,7 +273,7 @@ Changing retention does not recover files or history already removed. Choose a r
 
 ### Small files, compaction, and OPTIMIZE
 
-Small files create listing, planning, scheduling, and file-open overhead. Frequent tiny micro-batches, excessive output partitions, and high-cardinality table partitioning are common causes.
+A pipeline that writes frequent tiny batches can finish each write quickly yet leave expensive reads behind. Small files add listing, planning, scheduling, and file-open overhead. Frequent small micro-batches, too many output partitions, and high-cardinality table partitioning are common ways to create that problem.
 
 `OPTIMIZE` rewrites files into a better physical layout while preserving logical rows. For partitioned tables, compaction stays within partitions. For liquid-clustered tables, it organizes data using clustering keys.
 
@@ -365,6 +365,8 @@ REORG TABLE prep.silver.events APPLY (PURGE);
 ## 4. Data Ingestion & Streaming
 
 ### Choose ingestion from source semantics
+
+Before choosing an ingestion tool, ask what the source actually delivers. A new immutable file, a database change, and a complete authoritative snapshot have different identities and deletion rules. Match the pattern to those semantics, then define replay and progress tracking.
 
 | Source and requirement | Suitable starting pattern | Main correctness question |
 | --- | --- | --- |
@@ -477,6 +479,8 @@ A unified incremental pipeline can reduce duplicated batch/streaming business lo
 ## 5. Lakeflow & Orchestration
 
 ### Names and responsibilities
+
+A pipeline needs to obtain data, transform it, and coordinate execution, but those are separate responsibilities. The Lakeflow names below map to those jobs. Knowing the boundary is more useful than treating every pipeline feature as another scheduler.
 
 | Name | Responsibility |
 | --- | --- |
@@ -599,7 +603,7 @@ A full refresh is a data operation: if upstream retention no longer contains all
 
 ### Metastores, catalogs, schemas, and securable objects
 
-Unity Catalog governs data and AI assets using identities, privileges, lineage, and auditing. Tables and views use a three-level name: `catalog.schema.object`. Storage credentials and external locations are also securable objects, with different placement in the hierarchy. [Unity Catalog overview](https://docs.databricks.com/aws/en/data-governance/unity-catalog/)
+To follow access from a user to a table, start with the governed object and its identity. **Unity Catalog** manages data and AI assets through identities, privileges, lineage, and auditing. Tables and views use `catalog.schema.object`; storage credentials and external locations are also securable objects, with different placement in the hierarchy. [Unity Catalog overview](https://docs.databricks.com/aws/en/data-governance/unity-catalog/)
 
 ```text
 Account
@@ -682,7 +686,7 @@ Catalog Explorer, descriptions, owners, tags, and discoverability privileges hel
 
 ### Start with evidence
 
-Separate total latency into queueing, startup, planning, execution, and result delivery. A slow dashboard might be waiting for capacity rather than scanning slowly.
+A slow dashboard may be waiting for compute rather than reading data slowly. Split its total latency into queueing, startup, planning, execution, and result delivery before tuning an operator. That separation tells you whether the next investigation belongs in capacity, configuration, or the query itself.
 
 For classic Spark workloads, start with the jobs timeline, identify the longest stage, compare task duration distributions, then inspect skew, spill, shuffle, and I/O. For SQL/serverless workloads, use query history and query profiles to inspect expensive operators, rows, bytes, and pruning. Serverless notebooks/jobs do not expose the classic Spark UI. [Spark UI diagnosis](https://docs.databricks.com/aws/en/optimizations/spark-ui-guide/), [Query profiles](https://docs.databricks.com/aws/en/sql/user/queries/query-profile)
 
@@ -793,7 +797,7 @@ This reports usage units, not currency. Preserve signed retractions/restatements
 
 ### PySpark, SQL, notebooks, and Git folders
 
-Choose SQL for relational transformations that are clearest as SQL; choose PySpark when Python composition or integration makes the logic clearer. Both DataFrame expressions and SQL expose relational plans to Spark. Moving an operation into Python does not automatically make it more scalable.
+A transformation should be easy to understand in the language you choose. SQL often fits relational logic; PySpark can make Python composition or integration clearer. Both SQL and DataFrame expressions expose relational plans to Spark, so moving an operation into Python does not by itself make it more scalable.
 
 Notebooks are useful for exploration and operational diagnosis. Production logic should have explicit inputs, outputs, parameters, and dependencies. Avoid hidden state such as cells run out of order, temporary views created manually, or configuration inherited from an earlier session.
 
@@ -856,7 +860,7 @@ Pin direct dependencies and use reproducible artifacts/environments. Keep local-
 
 ### Jobs vs. all-purpose vs. serverless compute
 
-A **job** is an orchestrated workload, not one specific compute type. It can use supported serverless, jobs compute, or task-specific SQL compute.
+A scheduled **job** describes orchestrated work, rather than one particular compute type. Depending on task support, it can use serverless, jobs compute, or task-specific SQL compute. Choose the execution environment around the workload's configuration, startup, isolation, and operating needs.
 
 | Choice | Good fit | Main concern |
 | --- | --- | --- |

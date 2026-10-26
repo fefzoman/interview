@@ -1,6 +1,6 @@
 # Cost Engineering (FinOps): Data Engineer Interview Guide
 
-Cost engineering connects resource usage to the cost of delivering useful, reliable data. In an interview, explain what is billed, identify the workload's main cost driver, propose a change, and describe how you would verify both savings and correctness.
+A query can finish twice as fast and cost exactly the same. A cheaper worker can make a daily pipeline more expensive if it creates retries and missed deadlines. **Cost engineering** connects resource use to the price of delivering useful, reliable data. To reason about savings, first identify what is billed, then change the workload and verify both the billable effect and the result's correctness.
 
 **FinOps** brings engineering, finance, and business teams together to manage technology spending and business value. A lower bill is useful only if the system still delivers the required results. This framing follows the [FinOps Foundation framework](https://www.finops.org/framework/).
 
@@ -24,7 +24,7 @@ Cost engineering connects resource usage to the cost of delivering useful, relia
 
 ### Start with the billing unit
 
-Resource consumption and financial cost are related but different. An idle provisioned worker can still be billed. A query that finishes faster can cost the same under scan-based billing. A smaller stored file does not necessarily reduce a query engine's billable byte count.
+Start with a simple question: what event makes the bill increase? An idle provisioned worker may still be charged, while a faster query may cost the same under scan-based billing. A smaller stored file may not reduce billable query bytes either. Resource consumption and financial cost are connected through a specific meter, so identify that meter before proposing an optimization.
 
 | Category | Common billing units | Easily missed costs |
 | --- | --- | --- |
@@ -76,7 +76,7 @@ Draw the data path: source → processing → storage → consumers. Check each 
 
 ### Compare cost at the same service level
 
-Suppose a serverless job costs $0.08 per successful run, while an always-on provisioned pool costs $240/month. If both meet the same requirements, their simplified compute break-even is:
+Imagine choosing between a serverless job at a hypothetical $0.08 per successful run and an always-on provisioned pool at $240 per month. Before comparing their prices, establish that both meet the same service requirements. Under that assumption, the simplified compute break-even is:
 
 ```text
 Monthly runs at break-even = $240 / $0.08 = 3,000
@@ -92,7 +92,7 @@ Measure the same input, output, freshness, concurrency, and failure policy. Comp
 
 ### Size for the actual bottleneck
 
-**Right-sizing** chooses CPU, memory, storage performance, and parallelism that meet the workload's requirements at an acceptable cost. Average CPU alone is insufficient evidence.
+Low average CPU can tempt you to shrink a worker that is already struggling with memory or I/O. **Right-sizing** means selecting CPU, memory, storage performance, and parallelism that meet the workload's requirements at an acceptable cost. The relevant evidence is the actual bottleneck, which average CPU alone cannot identify.
 
 | Observation | Possible explanation | What to check before changing size |
 | --- | --- | --- |
@@ -129,7 +129,7 @@ This is a starting estimate. Catching up after an outage requires capacity above
 
 ### Identify which meter the optimization affects
 
-Under scan-based billing, reduce billable bytes. Under capacity billing, reduce resource-time or improve throughput on existing capacity. Reducing runtime on an already committed pool may free capacity without immediately reducing the invoice.
+An optimization saves money only if it changes a billed quantity or avoids future capacity. Under scan-based billing, that may mean fewer billable bytes. Under capacity billing, it may mean less resource-time or more throughput on existing resources. A faster job on an already committed pool can free capacity without immediately shrinking the invoice.
 
 Do not equate storage size, physical I/O, and billable scan bytes. For Athena's scan-based SQL pricing, compression and columnar projection can reduce charged scans; capacity billing is also available. See [Athena pricing](https://aws.amazon.com/athena/pricing/). Check the target engine's rules rather than carrying this assumption to every warehouse.
 
@@ -175,6 +175,8 @@ Avoid forcing all data into one output partition for convenience. Too few partit
 ## 5. Storage Lifecycle, Compression, and Retention
 
 ### Choose tiers using access and recovery requirements
+
+Old data may be rarely queried yet essential to a recovery deadline. Before moving it to a cheaper tier, compare access frequency with retrieval cost and restore time. The cheapest storage rate is useful only when the data remains available in the way the workload requires.
 
 | Data class | Possible policy | Decision to verify |
 | --- | --- | --- |
@@ -227,7 +229,7 @@ For EC2, Savings Plans discount eligible usage through a spending commitment; th
 
 ### Design for interruption before comparing prices
 
-Keep recovery state in durable storage, checkpoint at a measured interval, and make retries idempotent. Commit outputs atomically or through a transactional protocol so interrupted attempts cannot expose partial results or duplicate records. Avoid keeping the only copy of state on a replaceable worker.
+A discounted worker is useful only if losing it does not lose the only recoverable state or expose partial output. Keep recovery state in durable storage, choose a measured checkpoint interval, and make retries idempotent. Publish through atomic commits or a transactional protocol so interruption cannot leave partial results or duplicated records. Those recovery properties come before comparing compute prices.
 
 Diversify suitable capacity pools and provide an explicit fallback when a deadline requires it. Keeping critical coordinators on stable capacity while using Spot for replaceable workers can reduce risk, but lost shuffle/state may still cause recomputation. Treat interruption notices as helpful signals rather than the recovery mechanism. [EC2 interruption documentation](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-interruptions.html).
 
@@ -249,7 +251,7 @@ For commitments, distinguish **coverage** (how much eligible usage receives the 
 
 ### Assign cost to accountable owners
 
-Use account/project boundaries, resource tags or labels, query metadata, and job identifiers to associate spend with teams, products, environments, and pipelines. Shared infrastructure requires an explicit allocation rule; tags alone cannot divide a shared worker's bill. This follows the [FinOps allocation capability](https://framework.finops.org/framework/capabilities/allocation/).
+A shared platform bill tells you the total, but it does not explain who generated the work or who can change it. Associate spending with accountable teams, products, environments, and pipelines using account or project boundaries, tags or labels, query metadata, and job IDs. Shared resources still need an explicit allocation rule: tags alone cannot divide a worker's bill. [FinOps allocation capability](https://framework.finops.org/framework/capabilities/allocation/).
 
 **Example:** A shared platform costs $12,000/month. Team A accounts for 25% of measured slot-seconds, so a usage-proportional policy allocates $3,000 to A. State separately how idle capacity, shared storage, discounts, and support charges are handled. The allocation is an accounting rule, not proof that removing A would save $3,000.
 
@@ -283,7 +285,7 @@ Combine delayed billing exports with faster operational signals: bytes scanned, 
 
 ### Optimize within explicit service requirements
 
-Specify freshness, throughput, latency percentiles, successful completion rate, and recovery objectives before changing resources. **RPO** is the acceptable data-loss window; **RTO** is the target time to restore service. A cheap design that misses these requirements is not an equivalent alternative.
+Before removing spare capacity or extending batch intervals, state the service the cheaper design must still deliver: freshness, throughput, latency percentiles, successful completion, and recovery objectives. **RPO** defines the acceptable data-loss window; **RTO** defines the target time to restore service. A lower-cost design that misses those requirements is not an equivalent alternative.
 
 | Choice | Potential saving or benefit | Cost or reliability trade-off |
 | --- | --- | --- |
@@ -314,7 +316,7 @@ To validate an optimization, compare representative workloads with the same inpu
 
 ### Scenario: A dashboard causes a scan-cost spike
 
-**Question:** A dashboard refreshes every minute and repeatedly reads a year of order history. What would you change?
+A dashboard refreshes every minute, repeatedly scanning a year of order history, and query spending spikes. The tempting fix is to make each read smaller, but the useful comparison includes the cost of maintaining any replacement aggregate and preserving correct totals. What would you investigate and change first?
 
 **Answer outline:** Verify billing mode and identify queries responsible for the spike. Measure refresh frequency, billable bytes, users, and required freshness. Check whether filters prune partitions and whether the query selects unnecessary columns. Consider a maintained daily aggregate or reusable result if its refresh cost is lower. Validate late updates, deletes, and dashboard totals. Compare the combined refresh-and-read cost rather than only the cheaper read query.
 

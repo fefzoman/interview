@@ -1,6 +1,6 @@
 # Data Platform Testing: Data Engineer Interview Guide
 
-Data platform testing verifies transformation logic, data correctness, system integration, recovery behavior, and performance. A successful job can still publish duplicated, incomplete, stale, or semantically incorrect data. Explain how you detect those failures and prevent consumers from using invalid results.
+The most revealing test of an orders pipeline may be its second run. Does a replay duplicate revenue? Does an empty batch erase yesterday's output? Does a crash advance the checkpoint before the write is durable? Data platform testing asks these questions alongside the usual checks of transformation logic, integration, and performance, so consumers receive results they can trust.
 
 The running example is an orders pipeline: source database → ingestion → raw data → transformed tables → daily revenue. Orders have an `order_id`, `customer_id`, `amount_cents`, `status`, and update metadata. Examples assume refunds are modeled separately; real quality rules must follow the business definition.
 
@@ -19,6 +19,8 @@ The running example is an orders pipeline: source database → ingestion → raw
 ## 1. Unit, Integration, and End-to-End Testing
 
 ### What each level proves
+
+If a revenue calculation is wrong, a small fixture can isolate the business rule. If the driver commits incorrectly, that fixture will never expose it. Unit, integration, and end-to-end tests examine different boundaries; combine them around the failures the pipeline needs to prevent.
 
 | Level | Scope | Orders pipeline example | Main limitation |
 | --- | --- | --- | --- |
@@ -71,6 +73,8 @@ Use bounded polling with a deadline. A fixed sleep can be too short on a slow ru
 ## 2. Data Quality, Schema, and Contract Testing
 
 ### Three related checks
+
+A column can remain an integer and still break a report when its unit changes from cents to dollars. Testing the schema, the actual values, and the wider consumer agreement answers three related but different questions. Keep those claims explicit when deciding what a passing test proves.
 
 | Check | Question | Example |
 | --- | --- | --- |
@@ -140,7 +144,7 @@ Store failure counts, affected partitions, rule versions, run IDs, and safe diag
 
 ### Establish the comparison boundary first
 
-Reconciliation asks whether the target represents the expected source state after agreed transformations. Define the selected columns, keys, filters, time range, delete policy, and comparison position before comparing values.
+Before asking whether two totals match, establish whether they should. **Reconciliation** checks that the target represents the expected source state after agreed transformations. Define the columns, keys, filters, time range, delete policy, and comparison position first, so a difference has an interpretable meaning.
 
 For a full copy, compare equivalent snapshots. For CDC, coordinate a source snapshot or known commit boundary with the target's applied progress. If the target has already advanced beyond that boundary, use a target snapshot/version or a controlled pause that represents the same state. A watermark alone does not freeze either side.
 
@@ -205,7 +209,7 @@ Use bounded partitions and off-peak execution when reconciliation would burden t
 
 ### Parametrized tests
 
-A parametrized test applies one assertion to multiple explicitly chosen cases. It reduces repeated test code while making important boundaries visible.
+A timestamp parser needs more than one happy-path example: a boundary value, a missing field, and a malformed value can each expose a different error. A **parametrized test** applies one assertion to several explicitly chosen cases. It keeps those boundaries visible without repeating the same test code.
 
 This standard-library example uses subtests so each failing case is identified independently:
 
@@ -258,7 +262,7 @@ Use controlled seeds or a framework's reproduction mechanism, retain failing exa
 
 ### Incremental processing boundaries
 
-Test state across runs, rather than testing each batch in isolation. A pipeline can be correct on a fresh table and wrong when updating existing output.
+The first run can be correct while the second skips a boundary row or retains a deleted order. Test the state carried between runs, not just each batch in isolation. Incremental correctness depends on the existing output and progress as well as the incoming records.
 
 | Scenario | Expected assertion |
 | --- | --- |
@@ -316,7 +320,7 @@ For historical joins, use the dimension state valid at the event time when that 
 
 ### Idempotency is an observable state guarantee
 
-For state `S` and batch `B`, an idempotent application satisfies `apply(apply(S, B), B) = apply(S, B)`. Define whether this includes only the target table or also notifications, audit records, billing, and other side effects.
+To test idempotency, observe what happens when the same logical work is applied twice. For state `S` and batch `B`, the result should satisfy `apply(apply(S, B), B) = apply(S, B)`. Define the scope before making that assertion: does it cover only the target table, or also notifications, audit records, billing, and other effects?
 
 A merge on a stable key is not automatically idempotent. `total = total + incoming_amount`, nondeterministic timestamps, unstable event IDs, and arrival-order conflict handling can all change the result on retry.
 
@@ -365,6 +369,8 @@ Run destructive failure experiments in isolated environments unless a controlled
 
 ### Different tests answer different questions
 
+Processing a normal day's input quickly does not prove a pipeline can absorb a reconnection burst or recover an outage backlog. Different performance tests vary the workload or duration to expose different limits. Pick the question first, then define the traffic and acceptance criteria that can answer it.
+
 | Type | Question | Example |
 | --- | --- | --- |
 | Performance baseline | How fast and costly is a representative workload? | Process a normal day's data and measure runtime and resource use |
@@ -410,6 +416,8 @@ For a fixed workload, doubling resources and reducing runtime from 60 to 35 minu
 
 ### Put checks where their feedback is useful
 
+A fast deterministic check can run on every edit; a long recovery exercise needs a different place in the release process. Put checks where their feedback is useful and where failure can still stop invalid data from reaching consumers. Publication deserves its own checks because deployment success does not prove the current dataset is complete.
+
 | Stage | Typical checks | Gate |
 | --- | --- | --- |
 | Local/pre-commit | Parsing, linting, fast unit and fixture tests | Catch obvious errors before review |
@@ -454,7 +462,7 @@ Treat retries as a diagnostic or operational mechanism, not evidence that a fail
 
 ### Design tests for a new orders pipeline
 
-Start with the output grain, paid/revenue definition, allowed lateness, freshness target, and recovery guarantee. Then propose:
+For a new orders pipeline, begin with the promises the output must keep: its grain, paid-order and revenue definitions, allowed lateness, freshness target, and recovery guarantee. Then choose tests that would expose a broken promise, working from isolated logic toward the full consumer path:
 
 1. Unit fixtures for transformations, joins, and aggregation boundaries.
 2. Schema, uniqueness, relationship, amount, and freshness rules.

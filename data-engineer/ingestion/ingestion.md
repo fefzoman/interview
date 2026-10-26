@@ -1,6 +1,6 @@
 # Data Ingestion Patterns: Data Engineer Interview Guide
 
-Data ingestion moves data from source systems into a platform where it can be stored, processed, and analyzed. A strong interview answer explains how data is extracted, how progress is tracked, what happens during failures, and how completeness is verified.
+Getting the first page of orders from an API is usually straightforward. The harder question is whether you can get every order, keep up with changes, and recover after a failure without losing or duplicating work. That is the real job of ingestion: moving source data into a platform where it can be stored, processed, and analyzed, with a clear account of what arrived and what remains.
 
 Start with the requirements: acceptable freshness, volume and peak rate, source capabilities, update/delete behavior, retention, security, and recovery time. A daily reporting table and a fraud detection stream need different designs. Examples below illustrate patterns; API fields and guarantees depend on the source contract.
 
@@ -21,7 +21,7 @@ Start with the requirements: acceptable freshness, volume and peak rate, source 
 
 ### Separate the dimensions
 
-These terms describe different aspects of ingestion:
+A common design question is whether to use batch, streaming, or CDC. Before choosing, separate what each term describes: batch and streaming concern how work is processed, while CDC concerns how source changes are captured. They can therefore appear in the same pipeline:
 
 - **Batch:** process a bounded dataset as a job, such as yesterday's files or rows changed in a fixed time interval.
 - **Streaming:** continuously consume an ongoing sequence of records. An individual event, small buffer, or micro-batch can be the unit of work.
@@ -78,7 +78,7 @@ Track extraction and publication separately. A source offset durably landed in r
 
 ### REST extraction
 
-A REST API commonly exposes resources through endpoints such as `GET /orders`. Extraction may use filters, sorting, pagination, and selected fields. Before designing a connector, establish:
+An endpoint such as `GET /orders` makes extraction look like a sequence of HTTP requests. Reliable extraction starts earlier, with the API's contract: which orders can you see, how can they be filtered and sorted, and what happens while they change? REST APIs commonly offer pagination and field selection, but those features alone do not establish completeness. Before designing the connector, answer these questions:
 
 - Which records the authenticated account can see, including tenant and region boundaries.
 - Whether filtering by creation time, modification time, or a durable change token is supported.
@@ -168,7 +168,7 @@ Validate continuation URLs against the trusted scheme, host, and allowed endpoin
 
 ### Rate limits vs. concurrency limits
 
-A rate limit bounds work over time, such as 120 requests per minute. A concurrency limit bounds simultaneous in-flight requests. APIs may also limit bytes, query complexity, daily usage, or specific endpoints. Workers sharing a credential often share its quota.
+Adding workers can make an API connector faster until they all compete for the same quota. A **rate limit** bounds work over time, such as 120 requests per minute; a **concurrency limit** bounds requests in flight at once. A source may also restrict bytes, query complexity, daily usage, or individual endpoints. When workers share a credential, they often share its allowance too.
 
 For example, 120 requests/minute with 500 records/request gives an ideal upper bound of 60,000 records/minute. Authentication, empty pages, retries, and smaller responses consume quota and reduce useful throughput. Extra workers cannot exceed the shared allowance.
 
@@ -218,6 +218,8 @@ HTTP defines idempotency in terms of the intended server effect of repeated requ
 ## 4. Webhooks, Polling, and Event-Driven Ingestion
 
 ### Compare the triggering mechanisms
+
+How does the pipeline learn that a new order exists? It can ask periodically, receive a notification, or read from a retained event log. These choices change detection delay and recovery options, so compare the triggering mechanism separately from the guarantees of the data transfer.
 
 | Pattern | Initiator | Good fit | Main concern |
 | --- | --- | --- | --- |
@@ -280,7 +282,7 @@ Reconciliation can repair current-state gaps only within the source's available 
 
 ### Full load
 
-A full load extracts all records in a defined scope. Use it for initialization, small reference tables, rebuilding, or sources with no reliable incremental interface.
+When you first connect a source, you usually need its existing records before you can follow later changes. A **full load** extracts everything within a defined scope. It is also useful for small reference tables, rebuilding a destination, or sources without a reliable incremental interface. The key is to build the new version safely rather than destroy the only usable one before extraction succeeds.
 
 Prefer staging and validated publication over deleting the live table first:
 
@@ -380,7 +382,7 @@ Keep capture positions and source versions so snapshot rows cannot overwrite new
 
 ### Bulk ingestion
 
-Bulk interfaces export or load many records per operation, often through files. They usually reduce per-record request and transaction overhead compared with row-by-row transfer.
+If a source holds millions of historical orders, fetching them one at a time wastes requests and transaction overhead. **Bulk interfaces** move many records per operation, often through exported files. They usually make large transfers more efficient, but the unit of recovery becomes the export job or chunk, so you still need to track completion.
 
 For a source bulk-export API, submit a job, persist its identity, poll to a terminal state, enumerate the complete result set, download bounded chunks, and validate completion. Job creation retries need the same uncertain-outcome handling as other state-changing requests. Export links can expire, and an asynchronous job does not necessarily provide snapshot consistency.
 
@@ -431,6 +433,8 @@ Backpressure means slowing upstream issuance when downstream capacity is exhaust
 ## 7. Deduplication, Idempotency, and Ordering
 
 ### Delivery guarantees have a boundary
+
+A worker writes an order, then crashes before recording progress. On restart, should it skip the order or try again? The answer depends on where acknowledgment happens and whether repeating the write is safe. Delivery guarantees become useful only when you name the boundary they cover.
 
 | Guarantee | Meaning | Tradeoff |
 | --- | --- | --- |
@@ -503,7 +507,7 @@ Keep current-state tables and event history distinct. Deduplicating deliveries s
 
 ### Schema drift
 
-Schema drift is an unexpected difference between incoming data and the expected structure or meaning. It includes changed fields, types, nesting, nullability, precision, enum values, and semantics.
+A connector can keep receiving successful HTTP responses even after the source changes an amount from a decimal to a string. The transport is healthy, but the data contract has changed. **Schema drift** covers unexpected differences in structure or meaning: fields, types, nesting, nullability, precision, enum values, and semantics all matter.
 
 | Change | Risk | Response |
 | --- | --- | --- |
@@ -590,7 +594,7 @@ Separate “no new source data” from “connector stalled.” Source heartbeat
 
 ### Scenario A: SaaS orders API into an analytical warehouse
 
-**Requirements:** Updates must become queryable within 15 minutes; historical orders are needed; the API has shared quotas and webhooks.
+Consider a SaaS orders source with shared API quotas and webhook notifications. The warehouse needs historical orders, and later updates must become queryable within 15 minutes. Meeting that requirement means connecting the initial extraction to ongoing changes without leaving an unnoticed gap.
 
 Start with an authorized bulk export for history, if available. Establish an overlapping incremental boundary through a source-supported snapshot/change mechanism; if the API cannot provide a gap-free handoff, state that limitation and reconcile current state.
 
@@ -623,6 +627,8 @@ Retry failed files idempotently. Handle corrected source files through explicit 
 ## 10. Interview Questions and Answer Framework
 
 ### A structure for a system-design answer
+
+In an interview, walk one record from its source to a published result. Explain where it becomes durable, how the next run knows where to resume, and what evidence would reveal a missing record. The following sequence keeps the answer focused on the boundaries that make the design reliable.
 
 1. **Requirements:** Freshness, volume, burst rate, history, deletes, security, recovery objectives.
 2. **Source contract:** Available exports/change feeds, consistency, authentication, quotas, retained history.

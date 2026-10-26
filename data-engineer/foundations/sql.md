@@ -1,6 +1,6 @@
 # Advanced SQL: Data Engineer Interview Guide
 
-Advanced SQL interviews test whether you can produce the right result, explain how the database computes it, and preserve correctness as data volume and concurrency grow. Start an answer with the required grain and semantics, then discuss the plan, trade-offs, and validation.
+A revenue query can look convincing and still double every order after a join. It can return the right answer on a sample, then spill to disk on production data. Writing dependable SQL means understanding both the meaning of the result and the work required to produce it. This guide moves between those two views, using analytical questions to connect query semantics, execution plans, and production behavior.
 
 **Scope:** All ten topics below combine relational fundamentals with analytical and production patterns. Examples use PostgreSQL 18 syntax unless another engine is named. Features such as `FILTER`, `GROUPS`, `QUALIFY`, partial indexes, and `MERGE` vary by engine and version. Documentation reviewed: 2026-10-25.
 
@@ -25,7 +25,7 @@ Advanced SQL interviews test whether you can produce the right result, explain h
 
 ### Logical query processing vs. physical execution
 
-SQL describes a result. Its **logical order** explains which rows and values are available at each stage; its **physical plan** chooses algorithms and access paths to compute an equivalent result.
+You write `SELECT` first, yet a query's `WHERE` clause cannot generally use an alias created there. The reason is easier to follow once you separate two views of SQL. Its **logical order** explains which rows and values exist at each stage; its **physical plan** chooses algorithms and access paths that compute an equivalent result. SQL describes the result you want, while these two views explain its meaning and execution.
 
 A useful conceptual order for a query block is:
 
@@ -140,7 +140,7 @@ This returns customers without any matching order. `SELECT 1` communicates that 
 
 ### Window functions: ranking and neighboring rows
 
-A window function computes a value across related rows while retaining the input grain. `PARTITION BY` defines independent groups; the window's `ORDER BY` defines sequence and peers. It does not guarantee final output order.
+Suppose you need each order's amount alongside the previous order's amount. A `GROUP BY` would collapse rows, losing the detail you want to keep. A **window function** computes across related rows while retaining the input grain. Within the window, `PARTITION BY` defines independent groups and `ORDER BY` defines their sequence and peers. That ordering guides the calculation; final output ordering still needs its own clause.
 
 | Function | Purpose | Tie behavior or boundary |
 | --- | --- | --- |
@@ -330,7 +330,7 @@ Divide each count by that cohort's size computed from **all signed-up users**, n
 
 ### Logical vs. physical plans; EXPLAIN vs. EXPLAIN ANALYZE
 
-A logical plan represents relational operations such as filter, join, and aggregate. A physical plan chooses implementations: sequential scan, hash join, sorted aggregate, parallel exchanges. Engines may expose different levels of detail and may adapt execution at runtime.
+Two queries that mean the same thing can do very different amounts of work. To understand why, separate the **logical plan**, which represents operations such as filters, joins, and aggregates, from the **physical plan**, which selects implementations such as sequential scans, hash joins, sorted aggregates, and parallel exchanges. Engines expose different levels of detail and may adapt execution at runtime, so read a plan as an account of how this engine intends to run this query.
 
 In PostgreSQL, inspect estimates first, then collect runtime evidence for a safe workload:
 
@@ -383,7 +383,7 @@ Inspect cardinality errors early in the tree: they can cause a bad join order, u
 
 ### Rule-based vs. cost-based optimization
 
-**Rule-based transformations** apply equivalences, such as constant folding or removing a redundant expression. **Cost-based optimization (CBO)** estimates alternative plans using row counts, widths, selectivity, available ordering, memory, I/O, and sometimes network cost. Modern optimizers commonly combine rules with cost-based choices.
+Why does an engine choose a scan when an index exists? The answer usually combines equivalence rules with estimates of the work involved. **Rule-based transformations** simplify or rearrange a query without changing its meaning, for example by folding constants. **Cost-based optimization (CBO)** compares alternatives using estimated row counts, widths, selectivity, available ordering, memory, I/O, and sometimes network cost. Modern optimizers commonly use both.
 
 The chosen plan is the cheapest among alternatives explored under the optimizer's model and search budget. It is not guaranteed to be globally optimal, and estimates can be wrong. A rule can enable a new access path while the cost model decides whether to use it.
 
@@ -455,7 +455,7 @@ A **plan regression** is a worse execution strategy after changes to statistics,
 
 ### B-Tree, Hash, Bitmap, and BRIN
 
-An index trades storage and write work for a cheaper way to locate or order data. Its usefulness depends on predicate shape, distribution, required columns, and the fraction of the table needed.
+Finding one order by ID and reading most of a year's orders call for different access paths. An **index** makes some lookups or orderings cheaper in exchange for storage and extra write work. Whether that trade pays off depends on the predicate, the data distribution, the columns needed, and how much of the table the query must read. An index's presence alone does not make it the best path.
 
 | Structure | Strength | Limitation |
 | --- | --- | --- |
@@ -519,7 +519,7 @@ Columnar storage groups values by column, supporting compression, vectorized pro
 
 ### Join algorithms and complexity
 
-Let `N` and `M` be input row counts and `K` output rows. The simplified costs below exclude disk/network effects and assume ordinary equality joins where stated:
+Joining orders to customers can mean repeatedly probing an index, building a hash table, or walking two sorted inputs. Each approach has a different cost profile, and every one must still produce the matching output. Let `N` and `M` be input row counts and `K` the output count. The simplified comparison below excludes disk and network effects and assumes ordinary equality joins where stated.
 
 | Algorithm | Approximate work | Good conditions and risks |
 | --- | --- | --- |
@@ -588,7 +588,7 @@ If only customer eligibility matters, `EXISTS` avoids bringing order detail into
 
 ### Transaction guarantees to recall
 
-The definitions of ACID, MVCC, isolation levels, anomalies, and locking live in [Database engine internals](database.md#4-mvcc-transaction-isolation-and-locking). Use this section to apply them in SQL: choose transaction boundaries, prevent stale writes, and handle concurrent updates.
+Imagine two sessions reading the same balance and both deciding that an update is safe. A transaction boundary alone may not protect the rule they are relying on. The mechanisms behind ACID, MVCC, isolation levels, anomalies, and locking are covered in [Database engine internals](database.md#4-mvcc-transaction-isolation-and-locking). Here, the task is to apply them in SQL: choose boundaries, prevent stale writes, and handle concurrent changes.
 
 Before writing a transaction, state the invariant and the snapshot it requires. A multi-row invariant needs protection across all relevant rows; locking only the row being updated can still allow write skew.
 
@@ -635,7 +635,7 @@ Before either operation, ensure one relevant source row per target key or a deli
 
 ### Star schemas, facts, dimensions, and SCD Type 2
 
-A **fact table** records a business process at a declared grain, such as one order line. **Dimensions** hold descriptive context such as customer or product attributes. A **star schema** links facts to dimensions, often through surrogate keys, simplifying repeated analytical joins.
+Before writing a revenue query, decide what one row represents. A **fact table** records a business process at a declared grain, such as one order line; **dimensions** add descriptive context such as customer or product attributes. A **star schema** connects facts to dimensions, often through surrogate keys, so recurring analytical joins have a consistent structure. That declared grain is what lets you judge whether a join or aggregation changes the meaning of the numbers.
 
 Declare the grain before choosing keys and measures. Transaction facts record events; periodic snapshots record state at intervals; accumulating snapshots track lifecycle milestones. Revenue is generally additive across appropriate dimensions; account balance is often not additive across time; ratios need their underlying numerator and denominator.
 
@@ -738,7 +738,7 @@ For partition replacement, build the complete authoritative partition and publis
 
 ### Distributed execution and exchange operators
 
-**Massively parallel processing (MPP)** divides query work among workers. A coordinator plans stages/fragments, schedules work, and collects results. Local scans and partial aggregates run in parallel; exchange operators connect stages where data must change placement.
+When a table grows beyond one machine's useful capacity, a query can split its work across workers. That is **massively parallel processing (MPP)**. A coordinator plans stages or fragments, schedules them, and collects results; workers run local scans and partial aggregates. The interesting boundary is often the exchange between stages, where data must move to put related rows together.
 
 | Exchange | Purpose | Typical cost |
 | --- | --- | --- |
@@ -787,6 +787,8 @@ Trino uses connector-provided statistics for cost-based join order and distribut
 ## 10. Performance & Production
 
 ### CPU, memory, I/O, and network bottlenecks
+
+A slow query does not tell you what resource it needs. It may be computing, waiting for storage, moving data, spilling intermediate state, or simply waiting for admission. Start by matching the delay to observable evidence; only then choose an optimization. The table below connects common symptoms to changes that address their cause.
 
 | Bottleneck | Evidence | Possible response after confirming cause |
 | --- | --- | --- |

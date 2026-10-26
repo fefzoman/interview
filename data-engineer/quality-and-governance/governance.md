@@ -1,6 +1,6 @@
 # Data Governance & Security: Data Engineer Interview Guide
 
-Data governance defines who is accountable for data, what it means, how it may be used, and how those decisions are enforced. Data security protects its confidentiality, integrity, and availability. In an interview, connect policies to controls in ingestion, storage, transformation, serving, and deletion.
+An analyst finds a customer table in the catalog. Can they use it for a sales report, which fields should they see, and who approves a new use? Those are governance decisions. **Data governance** assigns accountability for meaning, use, and enforcement; **data security** protects confidentiality, integrity, and availability. This guide follows those decisions through ingestion, storage, transformation, serving, and deletion.
 
 **Scope:** Platform-neutral concepts and engineering examples. Public sources were checked on October 25, 2026. Examples illustrate design decisions rather than a deployable security configuration. The GDPR discussion concerns EU GDPR; retention schedules and legal exceptions depend on the processing context and applicable law.
 
@@ -23,7 +23,7 @@ Data governance defines who is accountable for data, what it means, how it may b
 
 ### What a data catalog does
 
-A **data catalog** is a searchable inventory of data assets and the context needed to use them. Assets can include tables, files, topics, dashboards, features, and data products. A useful catalog answers: What is this? Who owns it? Can I use it? How fresh is it? Where did it come from?
+Finding a table is only the first step toward using it safely. A **data catalog** combines a searchable inventory with the context a user needs: what the asset means, who owns it, whether access is appropriate, how fresh it is, and where it came from. The assets can include tables, files, topics, dashboards, features, and data products.
 
 Catalog entries usually combine automated extraction with human curation. Connectors can discover schemas and refresh timestamps; accountable teams must supply business definitions, intended uses, and ownership. A catalog containing thousands of undocumented tables makes discovery possible but does not establish trust.
 
@@ -87,6 +87,8 @@ Lineage supports impact analysis, root-cause analysis, sensitive-data tracing, a
 
 ### Accountability and responsibilities
 
+When a dataset breaks or a new use is proposed, someone must have authority to decide what happens next. Different roles contribute business judgment, definitions, technical controls, production, and consumption. Organizations can combine roles, but the responsibilities below still need clear owners.
+
 | Role | Main responsibility | Retail example |
 | --- | --- | --- |
 | Data owner | Accountable for business meaning, quality expectations, permitted use, and lifecycle decisions | Customer domain lead approves uses of customer data |
@@ -131,7 +133,7 @@ For the retailer, the customer domain defines customer status and retention purp
 
 ### Govern the contract
 
-[Data contracts and schema management](data-contracts.md) owns contract structure, serialization formats, schema registries, compatibility directions, versioning, and contract tests. Governance establishes who approves changes, which uses are permitted, and how policy obligations follow the dataset.
+A compatible schema change can still introduce data that a consumer is not permitted to use. Governance supplies the approval process, permitted-use decisions, and policy obligations that follow the dataset. The technical interface is covered in [Data contracts and schema management](data-contracts.md): contract structure, serialization, registries, compatibility directions, versioning, and tests.
 
 An illustrative order contract could state:
 
@@ -181,7 +183,7 @@ Some constraints need state: duplicate detection and referential integrity canno
 
 ### PII and personal data
 
-**Personally identifiable information (PII)** is a common security term; its definition varies across frameworks. GDPR uses **personal data**, including information about an identified or identifiable natural person. Do not limit discovery to obvious names and government identifiers.
+Removing names from a dataset does not settle whether people can be identified. **Personally identifiable information (PII)** is a common security term whose definition varies across frameworks. GDPR uses **personal data**, covering information about an identified or identifiable natural person. Discovery therefore needs to look beyond obvious names and government identifiers to the context and combinations that can identify someone.
 
 | Category | Examples | Why it matters |
 | --- | --- | --- |
@@ -242,7 +244,7 @@ For sales trends, omit direct identifiers and use only the dimensions needed for
 
 ### Authentication, authorization, and access scope
 
-**Authentication** establishes an identity. **Authorization** decides what that identity may do. A valid login does not establish permission to read every dataset.
+A successful login tells the platform who is asking; it does not tell it which data that person may read. That is the distinction between **authentication**, which establishes identity, and **authorization**, which decides permitted actions. The access controls below make those decisions at different scopes.
 
 | Model/control | Decision basis | Example | Tradeoff |
 | --- | --- | --- | --- |
@@ -301,7 +303,7 @@ Even authorized queries may infer hidden values through filters, joins, counts, 
 
 ### IAM across people and workloads
 
-**Identity and access management (IAM)** governs identities, credentials, permissions, trust relationships, and their lifecycle. For data systems, follow the whole path: who can assume a workload identity, access storage, run a query, change a policy, or use a decryption key?
+An analyst's table permission is only one link in the access path. Also ask who can assume a workload identity, reach raw storage, run queries, alter policies, and use decryption keys. **Identity and access management (IAM)** governs those identities, credentials, permissions, trust relationships, and their lifecycle across people and workloads.
 
 Prefer federated human identities with MFA and short-lived workload credentials over shared accounts and embedded long-lived secrets. Give ingestion, transformation, serving, and administration distinct identities when their duties differ. A consumer should not inherit the ingestion identity's broad raw-data access.
 
@@ -359,7 +361,7 @@ Audit key use and policy changes, restrict destruction, and test restoration wit
 
 ### Retention as an engineered lifecycle
 
-A retention policy states what data is kept, for which purpose, how long, from which starting event, and how disposal occurs. It must cover copies, not only the primary table. GDPR does not prescribe one universal retention period; choose periods based on purpose and applicable obligations. [Irish Data Protection Commission retention guidance](https://dataprotection.ie/en/faqs/responsibilities-data-controllers/how-long-should-personal-data-be-held-meet-obligations-imposed-gdpr).
+Deleting a row from the main warehouse does not dispose of every copy. A **retention policy** needs to say what is kept, for which purpose, for how long, from which starting event, and how disposal covers copies. GDPR does not set one universal retention period; the purpose and applicable obligations determine the periods to use. [Irish Data Protection Commission retention guidance](https://dataprotection.ie/en/faqs/responsibilities-data-controllers/how-long-should-personal-data-be-held-meet-obligations-imposed-gdpr).
 
 For each data category, record the owner, purpose, retention trigger, duration, deletion mechanism, exceptions, and evidence. Triggers can differ: event time, account closure, contract expiry, or resolution of a support case. Specify how late arrivals and corrected timestamps affect expiry.
 
@@ -428,7 +430,7 @@ Deleting a token mapping alone may not erase the subject: direct identifiers, ot
 
 ### Auditability versus debugging
 
-Debug logs help explain execution failures. **Audit logs** provide evidence of security-relevant activity and decisions. **Access monitoring** evaluates that activity for misuse, policy drift, or anomalous behavior. Having logs is not equivalent to reviewing them or enforcing a policy.
+When someone asks who read a sensitive dataset, an application error log may not contain the evidence. **Audit logs** record security-relevant activity and decisions, while debug logs explain execution failures. **Access monitoring** evaluates the activity for misuse, policy drift, or anomalies. Collecting logs is therefore only a step toward reviewing activity and enforcing policy.
 
 Capture events across identity, storage, query, pipeline, catalog, and key services. Control-plane logs record actions such as granting a role; data-plane logs record actions such as reading a table. Verify which event types are enabled, whether coverage is complete, and what delivery delays apply.
 
@@ -483,6 +485,8 @@ For a policy-service outage, define fail-closed behavior and any explicitly appr
 ## 9. Interview Practice
 
 ### A structure for architecture answers
+
+For a governance design answer, follow one sensitive field from its source to a report, an export, and eventual deletion. Name the people accountable for its meaning and use, then show where the platform enforces each decision. That path makes both controls and gaps easier to explain.
 
 1. **Clarify use and sensitivity:** who needs what data, for which purpose, across which tenants and jurisdictions?
 2. **Map the flow:** include sources, raw storage, transformations, serving, copies, and recovery paths.

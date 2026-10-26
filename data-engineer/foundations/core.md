@@ -1,6 +1,6 @@
 # Core Engineering Concepts: Data Engineer Interview Guide
 
-Core engineering knowledge explains why a pipeline works, where it fails, and which trade-offs a design makes. In an interview, connect a definition to a concrete workload, a failure scenario, and an observable result.
+An orders pipeline can run perfectly for weeks, then count the same sale twice after a worker restarts. It can also slow down as traffic grows, even after you add more machines. Understanding why takes more than knowing the tools: it takes a working model of coordination, storage, and failure. This guide builds that model by following the decisions behind a reliable data pipeline.
 
 **Scope:** Distributed systems, cross-system transactions, storage and file systems, performance, networking, and production reliability. Product behavior depends on version and configuration; linked papers and official documentation support the implementation-specific details. Examples and sizing calculations illustrate reasoning rather than prescribe production settings.
 
@@ -23,7 +23,7 @@ Core engineering knowledge explains why a pipeline works, where it fails, and wh
 
 ### Scalability, horizontal vs. vertical scaling
 
-**Scalability** is the ability to handle more work while meeting service objectives as resources increase. Describe the workload first: records per second, dataset size, concurrent queries, or state size. **Elasticity** is the ability to adjust capacity as demand changes.
+Suppose your store doubles its order volume. Can the pipeline handle the increase without missing its freshness target? That is the question behind **scalability**: how much more work a system can handle, within its service objectives, as you give it more resources. Define the work first—records per second, dataset size, concurrent queries, or state size. **Elasticity** asks a related question: can the system adjust its capacity as demand rises and falls?
 
 | Approach | What changes | Benefits | Limits |
 | --- | --- | --- | --- |
@@ -98,7 +98,7 @@ For a payment-like operation, use a stable idempotency key, enforce its uniquene
 
 ### Partitioning, sharding, replication
 
-**Partitioning** divides data into subsets. **Sharding** usually means distributing such subsets across nodes. **Replication** copies subsets for durability, availability, or read capacity. A system commonly combines all three.
+Once the orders no longer fit comfortably on one worker, you need to divide the work. **Partitioning** splits the data into subsets; **sharding** usually places those subsets on different nodes. You may then copy each subset for durability, availability, or read capacity, which is **replication**. These choices solve different problems, so a system often uses all three together.
 
 | Strategy | Useful property | Typical problem |
 | --- | --- | --- |
@@ -189,7 +189,7 @@ For single-database ACID, MVCC, isolation anomalies, locking, and optimistic con
 
 ### Distributed transactions, 2PC, Saga
 
-A **distributed transaction** coordinates changes across participants. It needs a specified atomicity and isolation contract; distribution alone supplies neither.
+An order may need to update inventory in one system and payment state in another. What should happen if only one update succeeds? A **distributed transaction** coordinates changes across participants, but the useful guarantee comes from its explicit atomicity and isolation contract. Putting the changes on different machines supplies neither guarantee by itself.
 
 **Two-phase commit (2PC)** coordinates an atomic outcome:
 
@@ -225,7 +225,7 @@ When writing a database and publishing an event, a **transactional outbox** stor
 
 ### HDD vs. SSD, sequential vs. random I/O
 
-**Hard disk drives (HDDs)** use rotating media, so seeks and rotational delay make many small random operations expensive. **Solid-state drives (SSDs)** remove mechanical seeks and support far more random I/O, but controller queues, flash management, endurance, and device bandwidth still matter.
+Reading a large file from beginning to end and fetching thousands of scattered records put very different demands on storage. On a **hard disk drive (HDD)**, each scattered access can require a seek and rotational wait. A **solid-state drive (SSD)** removes those mechanical delays and supports far more random I/O, but still has limits: controller queues, flash management, endurance, and bandwidth all affect the result.
 
 **Sequential I/O** accesses contiguous regions and amortizes per-operation overhead. **Random I/O** touches scattered locations. Compare throughput in bytes per second with **IOPS**, operations per second, and state the request size: 10,000 small reads and 10,000 large reads represent different bandwidth requirements.
 
@@ -293,7 +293,7 @@ Separate statistics used to choose a plan from metadata used to eliminate data s
 
 ### Latency vs. throughput, percentiles (P95/P99)
 
-**Latency** is the time for one operation, measured across a defined boundary. **Throughput** is work completed per time unit. Increasing batching or concurrency can improve throughput while making individual requests slower through queueing.
+A pipeline can process more orders per second while making each order wait longer. Batching and concurrency often create exactly that trade-off. **Throughput** measures completed work per unit of time; **latency** measures the time for one operation across a boundary you define. Keep both in view, because a higher throughput number does not tell you whether a particular user or event received a faster response.
 
 **P95** is the latency at or below which approximately 95% of observations fall; **P99** similarly describes 99%. An average can hide a long tail affecting users or delaying a distributed stage. A request waiting for many parallel subrequests is exposed to the slowest required response.
 
@@ -377,6 +377,8 @@ Separate cold and warm caches, account for startup and autoscaling, and avoid re
 
 ### TCP/IP, DNS, HTTP, TLS
 
+Before an ingestion worker receives a single byte from an HTTPS API, it may need to resolve a name, establish a connection, and negotiate encryption. Each step has its own job and its own failure modes. Following that request through the stack makes a timeout much easier to investigate.
+
 | Component | Responsibility | What it does not guarantee |
 | --- | --- | --- |
 | IP | Address and route packets across networks | Reliable delivery or application identity |
@@ -445,7 +447,7 @@ Use least-privilege workload identities, short-lived credentials where supported
 
 ### High availability, disaster recovery
 
-**High availability (HA)** keeps a service usable through expected component failures, often using redundancy and automated failover. **Disaster recovery (DR)** restores service and data after a larger event, such as a regional outage, corruption, or destructive deployment.
+If one worker fails, you usually want another to take over without interrupting the service. If a deployment corrupts the data or an entire region goes down, you need a way to restore it. Those are the different jobs of **high availability (HA)** and **disaster recovery (DR)**: HA keeps a service usable through expected component failures, often with redundancy and automated failover; DR restores service and data after a larger incident.
 
 HA and DR address different scopes. An online replica can reproduce a destructive delete, so it does not replace independent historical recovery. Define failure domains, dependencies, capacity after failure, and who can execute the recovery procedure.
 
@@ -516,7 +518,7 @@ Track **cost per successful unit of work**, such as cost per million validated e
 
 ### Consistency vs. latency vs. availability
 
-Coordination can increase latency and make operations depend on enough reachable replicas. Serving local replicas improves read latency and independence but may expose older values. Even without a partition, cross-region coordination costs round trips; CAP alone does not explain that everyday latency trade-off.
+Imagine serving a customer from a nearby replica while the latest inventory update is still crossing a region boundary. The read is fast, but it may be stale. Waiting for coordination can give a stronger guarantee, at the cost of round trips and dependence on enough reachable replicas. This tension exists during normal operation as well as failures; CAP alone does not explain the everyday latency cost of cross-region coordination.
 
 Choose guarantees per operation. Inventory reservation may need a coordinated conditional change, while an approximate product-view counter can tolerate delayed convergence. State what a caller sees during failure and how conflicting updates are resolved.
 

@@ -2,7 +2,7 @@
 
 Documentation reviewed: 2026-10-25. ClickHouse evolves quickly; optimizer behavior, feature maturity, defaults, and Cloud capabilities depend on the deployed version. Check `SELECT version()` and the documentation for that version before applying settings.
 
-ClickHouse is a column-oriented SQL database built for analytical workloads: ingest many records, read selected columns, filter large datasets, and aggregate quickly. Interview answers should connect its speed to physical data layout, vectorized execution, pruning, and parallelism, then explain the correctness and operational trade-offs.
+An events dashboard may examine billions of records but use only a timestamp, a tenant ID, and an event type. ClickHouse is built around that analytical workload: ingest many records, read selected columns, filter heavily, and aggregate quickly. Its speed becomes easier to explain when you connect column layout, vectorized execution, pruning, and parallelism to the actual query—and account for the correctness and operational trade-offs.
 
 **A useful interview answer:** “ClickHouse stores analytical data in compressed columns and processes batches of values. MergeTree tables organize data into sorted, immutable parts, with sparse indexes that help skip irrelevant ranges. Background merges consolidate parts. Sharding divides a dataset, while replication maintains copies for availability.” [Columnar storage](https://clickhouse.com/resources/engineering/what-is-columnar-storage), [MergeTree](https://clickhouse.com/docs/engines/table-engines/mergetree-family/mergetree)
 
@@ -25,7 +25,7 @@ Examples use ClickHouse SQL. Create the `analytics` database with `CREATE DATABA
 
 ### OLAP architecture and column-oriented storage
 
-OLAP queries usually scan many records but need a small subset of columns. For example, a dashboard may calculate hourly request counts from billions of events using only a timestamp, tenant, and event type.
+Consider a dashboard that counts requests by hour. Even with billions of events, it may need only the timestamp, tenant, and event type. That combination—many records, relatively few columns—is characteristic of an OLAP workload and explains why column-oriented storage is a good starting point for understanding ClickHouse.
 
 Columnar storage groups values of the same column together. This reduces bytes read for narrow analytical queries and improves compression because neighboring values have similar types and often similar distributions. Sorting further groups related values. A row-oriented database instead makes retrieving or changing a complete individual record convenient.
 
@@ -88,7 +88,7 @@ Loss of Keeper quorum can prevent replicated writes and coordination even when d
 
 ### MergeTree and ReplicatedMergeTree
 
-`MergeTree` is the general-purpose sorted storage engine. `ReplicatedMergeTree` adds replication of table data within a shard using a shared coordination path and distinct replica identities.
+The table engine determines how ClickHouse stores and maintains your rows. **`MergeTree`** is the general-purpose sorted storage engine; **`ReplicatedMergeTree`** adds copies of the table data within a shard. Replicas coordinate through a shared path and need distinct identities, so replication has its own configuration and failure behavior.
 
 The replication prefix combines with specialized merge behavior: for example, `ReplicatedReplacingMergeTree` and `ReplicatedAggregatingMergeTree`. Replication and replacement/aggregation solve different problems.
 
@@ -210,6 +210,8 @@ ORDER BY occurred_at;
 
 ### ORDER BY vs. PRIMARY KEY vs. PARTITION BY
 
+In ClickHouse, a primary key does not enforce the uniqueness many SQL users expect. Sorting, sparse indexing, and lifecycle partitioning are separate choices. Start with the filters your queries use and the data you need to manage together, then assign each clause its job.
+
 | Clause | Controls | Does not provide |
 | --- | --- | --- |
 | `ORDER BY` | Physical sorting within parts; identity for replacement/collapsing behavior | Guaranteed SELECT output order |
@@ -311,7 +313,7 @@ Expired rows may remain physically stored until TTL processing completes. For wh
 
 ### Query pipeline and execution plans
 
-Use `EXPLAIN` to inspect what the engine intends to do, then logs and measurements to see what it actually costs.
+If a query is slow, first ask whether it reads the expected ranges and columns. `EXPLAIN` shows the engine's intended plan; logs and measurements reveal the actual cost. The example below starts with the access path for a tenant's events in one day, giving you a concrete plan to compare with runtime evidence.
 
 ```sql
 EXPLAIN indexes = 1
@@ -398,7 +400,7 @@ Spilling consumes temporary disk space and I/O and does not cover every operator
 
 ### Batch inserts and asynchronous inserts
 
-Many tiny synchronous inserts create excessive parts, metadata work, replication tasks, and merges. Batch by rows and bytes within the pipeline's latency and memory budget. Thousands to tens of thousands of rows are a useful starting point, with roughly 10,000–100,000 often appropriate for benchmarking; there is no universal optimum.
+A producer that sends one row at a time can create far more background work than its data volume suggests. Tiny synchronous inserts produce excessive parts, metadata, replication tasks, and merges. Batch by both rows and bytes within the pipeline's latency and memory budget. Thousands to tens of thousands of rows are a useful starting point; roughly 10,000–100,000 is often worth benchmarking, but no batch size is universally best.
 
 Asynchronous inserts let the server combine small client inserts in memory and flush them in batches. Buffers are maintained per node and grouped by compatible insert shape/settings, so many different shapes can fragment batching.
 
@@ -521,7 +523,7 @@ Keep every version of an entity on the same shard and in the same partition for 
 
 ### Shards vs. replicas and the Distributed Engine
 
-The following is a self-managed cluster example. It assumes database `analytics` exists on every node, a configured cluster named `interview_cluster`, Keeper, and correct `{shard}` / `{replica}` macros.
+To expand capacity, separate distributing the dataset from keeping redundant copies of it. The following self-managed example gives each shard a local replicated table. It assumes `analytics` exists on every node, the cluster `interview_cluster` is configured, Keeper is available, and the `{shard}` and `{replica}` macros are correct.
 
 ```sql
 CREATE TABLE analytics.events_local ON CLUSTER interview_cluster
@@ -596,7 +598,7 @@ Load balancing chooses among replicas according to settings, locality, and healt
 
 ### Small parts, merge amplification, and insert batching
 
-Too many small parts increase index/metadata overhead, file operations, replication work, and the number of ranges scanned. Merges repeatedly read and rewrite data, creating write amplification: ingesting one byte can produce several bytes of background storage work.
+When ingestion falls behind, the bottleneck may be work created by earlier inserts. Too many small parts mean more indexes and metadata, file operations, replication, and scan ranges. Merges also read and rewrite data repeatedly, creating **write amplification**: one byte ingested can generate several bytes of background storage work.
 
 Typical causes include per-row inserts, too many producers, high-cardinality partitions, and many materialized-view targets. A large batch crossing thousands of partitions can still be unhealthy.
 
@@ -666,7 +668,7 @@ Bound concurrent queries and per-query parallelism together. Use separate users/
 
 ### Cluster deployment and replication recovery
 
-Deploy replicas across independent failure domains and place Keeper voters so a normal infrastructure failure preserves quorum. Keep cluster definitions, replica identities, paths, schema, and compatible versions consistent. Test rolling upgrades against version-specific compatibility guidance. [Deployment example](https://clickhouse.com/docs/architecture/cluster-deployment), [Upgrade guidance](https://clickhouse.com/docs/operations/update)
+A recovery plan starts with where the copies live. Spread replicas across independent failure domains, and place Keeper voters so a normal infrastructure failure leaves a quorum available. Cluster definitions, replica identities, paths, schema, and compatible versions must remain consistent. Before a rolling upgrade, test against the compatibility guidance for the deployed versions. [Deployment example](https://clickhouse.com/docs/architecture/cluster-deployment), [Upgrade guidance](https://clickhouse.com/docs/operations/update)
 
 For a lagging replica, inspect Keeper connectivity, available disk, replication queue exceptions, missing parts, network connectivity, and fetch activity before changing metadata. A healthy replica can supply missing parts. Losing every copy of a shard requires backup restore or replay from a retained source.
 

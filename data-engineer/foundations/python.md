@@ -1,5 +1,7 @@
 # Python: Data Engineer Interview Guide
 
+A Python ingestion job often starts as a short script: fetch records, clean them, and write the result. The interesting problems appear when the input grows, a request times out, or a retry repeats a write. This guide connects Python's language rules to those practical situations, then follows them through concurrency, testing, packaging, and production operation.
+
 ## Contents
 
 1. [Language Fundamentals](#1-language-fundamentals)
@@ -18,7 +20,7 @@
 
 ### Data types, mutability, and hashability
 
-Python is dynamically typed: objects have types, and a name can be rebound to an object of another type. Operations still enforce type rules; Python does not automatically make every combination meaningful. For example, `1 + "2"` raises `TypeError`.
+A connector may receive an order ID as an integer in one payload and a string in another. Python lets a name refer to either object because it is dynamically typed: the type belongs to the object, and a name can be rebound. That flexibility does not make every operation valid. Trying `1 + "2"`, for example, still raises `TypeError`, so input handling needs an explicit type contract.
 
 | Type | Mutable? | Typical use and interview detail |
 | --- | --- | --- |
@@ -155,7 +157,7 @@ Catch the narrow exception you can handle. Use bare `raise` to propagate the cur
 
 ### CPython architecture, bytecode, and the interpreter
 
-Python is a language; **CPython** is its widely used implementation, primarily written in C. Alternative implementations can make different choices about execution, memory, and concurrency.
+When a Python job consumes too much memory or fails to speed up with threads, the implementation matters. Python is the language; **CPython**, written primarily in C, is its widely used implementation. Other implementations can make different execution, memory, and concurrency choices. The following path describes how CPython takes source text to running work.
 
 ```text
 Source text -> parsing / AST -> code objects containing bytecode
@@ -233,7 +235,7 @@ Check both the build and running process. A compatible build can still run with 
 
 ### Classes, inheritance, polymorphism, and encapsulation
 
-A class combines behavior with an object's state. Instance attributes belong to individual objects; class attributes are shared through the class unless shadowed. A mutable class attribute used as if it were an instance's list is a common source of accidental cross-run state.
+Suppose each ingestion run needs its own list of rejected records. A class can keep that state alongside the operations that manage it, but the attribute's location matters: instance attributes belong to individual objects, while class attributes are shared through the class unless shadowed. Putting a mutable list on the class and treating it as private run state can make records leak between runs.
 
 - **Inheritance:** a subtype reuses or refines a parent interface and implementation.
 - **Polymorphism:** callers use a common operation with multiple concrete implementations, such as `sink.write(rows)`.
@@ -342,7 +344,7 @@ These are design questions, not a requirement to add five interfaces. Choose inh
 
 ### Closures, higher-order functions, and typed decorators
 
-A **higher-order function** accepts a callable, returns one, or both. Closures can hold configuration without a class; `functools.partial` binds selected arguments to an existing function. Keep captured mutable state deliberate because it persists across calls.
+Several connectors may need the same retry or timing behavior with different settings. A **higher-order function** can express that reuse by accepting a callable, returning one, or both. A closure can retain configuration without a class, and `functools.partial` can bind selected arguments to an existing function. Captured mutable state also survives between calls, so make that persistence deliberate.
 
 The following synchronous timing decorator preserves the wrapped callable's parameter types with `ParamSpec` and its result type with `TypeVar`. The timer logs on success and on failure without swallowing the original exception.
 
@@ -468,7 +470,7 @@ Immutability reduces accidental shared-state changes, but a tuple or frozen data
 
 ### Threading, multiprocessing, and asyncio
 
-**Concurrency** means multiple operations can make progress over overlapping periods. **Parallelism** means work executes simultaneously. An event loop can handle many concurrent network requests on one thread without executing their Python code in parallel.
+While one API request waits for the network, a job may be able to start another. That is **concurrency**: operations make progress over overlapping periods. **Parallelism** goes further and executes work simultaneously. An event loop can manage many network requests on one thread, but it does not thereby run their Python code in parallel. The right model depends on where the job spends its time.
 
 | Model | Useful workload | Shared state | Main cost or failure mode |
 | --- | --- | --- | --- |
@@ -578,7 +580,7 @@ Graceful shutdown stops admission, signals workers, allows a bounded drain, rele
 
 ### Iterative versus vectorized processing
 
-An ordinary Python loop performs iteration, object access, and operations at the Python level. A vectorized expression delegates operations over arrays or columns to compiled kernels. This often reduces per-element overhead, but still does work proportional to the relevant data and can allocate large intermediate arrays.
+A loop that cleans ten records may be perfectly adequate; the same loop over ten million records can spend much of its time in Python-level iteration and object access. A vectorized expression delegates array or column operations to compiled kernels, often reducing that per-element overhead. It still performs work proportional to the relevant data and may allocate large intermediate arrays, so vectorization does not remove the need to consider memory.
 
 For an installed NumPy version, this example performs array operations and checks its output:
 
@@ -714,7 +716,7 @@ Measure a baseline, identify CPU/memory/I/O limits, fix algorithmic waste and re
 
 ### Modular architecture and separation of concerns
 
-A useful ingestion boundary separates external data acquisition, deterministic normalization, validation, and durable publication. Keep source-specific response parsing outside business transformations, and keep checkpoint advancement out of a helper that merely converts types.
+Consider a helper that converts a timestamp and also advances the ingestion checkpoint. If conversion succeeds but publication fails later, the next run could skip data. A clearer ingestion boundary separates external acquisition, deterministic normalization, validation, and durable publication. Keep source-specific response parsing outside business transformations, and let the part that knows publication succeeded own checkpoint advancement.
 
 ```text
 Source adapter -> parse / validate -> transform -> sink / transaction
@@ -813,6 +815,8 @@ Exclude credentials, raw personal data, SQL parameter values, and signed URLs. P
 ## 8. Testing & Code Quality
 
 ### Unit, integration, end-to-end, and contract tests
+
+A transformation can pass every isolated test and still fail because the real driver buffers an entire result or the database commits differently than expected. Different test levels answer different questions. Use small deterministic checks for local behavior, then exercise the real boundaries where a wrong assumption could lose or duplicate data.
 
 | Test level | Checks | Example | Main limitation |
 | --- | --- | --- | --- |
@@ -928,7 +932,7 @@ Pre-commit hooks provide fast local feedback, such as formatting and linting. Th
 
 ### Modules, packages, and the import system
 
-A **module** is an importable unit, often a `.py` file. A regular **package** groups modules and normally has an `__init__.py`; namespace packages can span locations without that file. An import name is not necessarily the distribution name installed by a package manager: for example, a distribution can expose several importable packages.
+A job that imports correctly on your laptop can fail in a worker image because installing a distribution and importing a module are different operations. A **module** is an importable unit, often a `.py` file. A regular **package** groups modules and normally has an `__init__.py`; a namespace package can span locations without one. The distribution name used by a package manager need not match its import names, and one distribution can expose several packages.
 
 On first import, Python finds a module through its import machinery, creates a module object, executes its top-level code, and caches it in `sys.modules`. Subsequent ordinary imports reuse the cached module. Expensive top-level work therefore affects startup, and circular imports can expose partially initialized modules.
 
@@ -1010,7 +1014,7 @@ Run with an appropriate non-root identity, make writable locations explicit, and
 
 ### Database access, connection pooling, and transactions
 
-Python's DB-API defines common concepts such as connections, cursors, parameter binding, commits, and rollbacks. Drivers still differ in placeholders, thread-safety, transaction defaults, bulk loading, and streaming behavior. Consult the selected driver's contract rather than assuming complete interchangeability. [DB-API specification](https://peps.python.org/pep-0249/).
+Opening a database connection is only the beginning of a reliable write path. Python's DB-API supplies common concepts—connections, cursors, parameter binding, commits, and rollbacks—but drivers differ in placeholders, thread-safety, transaction defaults, bulk loading, and streaming behavior. Treat the selected driver's contract as part of the pipeline design instead of assuming drivers are interchangeable. [DB-API specification](https://peps.python.org/pep-0249/).
 
 - Bind **values** with driver parameters; never interpolate untrusted values into SQL strings.
 - Identifiers such as table names generally cannot be value parameters. Use an allowlist and the driver's identifier-composition API.
@@ -1181,7 +1185,7 @@ Separate **event time**, **source modification/commit time**, and **ingestion ti
 
 ### Async I/O versus multiprocessing in a mixed pipeline
 
-An ingestion job can combine I/O waiting, decoding, normalization, and native writes. Choose concurrency per stage only when profiling justifies the complexity. Async extraction followed by CPU-heavy Python work on the event-loop thread can erase its latency benefit; moving tiny records to a process pool one at a time may cost more than processing them locally.
+A real ingestion job rarely has just one kind of work: it waits for I/O, decodes responses, normalizes values, and invokes native writers. Concurrency helps only when it addresses the stage that is limiting progress. CPU-heavy Python code on an async event-loop thread can erase the benefit of concurrent extraction; sending tiny records individually to a process pool can cost more than local processing. Profile the stages before combining concurrency models.
 
 Batch sufficiently expensive CPU work, minimize serialized payloads, and bound every stage's in-flight work. A synchronous system with a small thread pool may be easier to operate than an async/process hybrid with the same throughput. Reuse a native engine's execution facilities before layering additional pools around it.
 

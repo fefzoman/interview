@@ -1,6 +1,6 @@
 # Apache Spark: Data Engineer Interview Guide
 
-Spark is a distributed processing engine for batch and streaming data. For interviews, explain where an operation runs, how data moves, what state it creates, and how the result survives failures.
+A Spark job that looks like a few DataFrame operations can send terabytes across a cluster. Another job may finish quickly until one unusually large customer leaves a single task running long after the rest. To explain either outcome, follow the work: where it runs, how data moves, what state it builds, and how it recovers. This guide uses that path to connect Spark's execution model to practical tuning decisions.
 
 **Reference versions:** Apache Spark 3.5.6 and 4.0.0. These are explicit documentation baselines, not a claim about the latest release. Examples use PySpark and assume an existing `SparkSession` named `spark`. Table names, paths, and Kafka endpoints are illustrative. Iceberg and Delta Lake require compatible connectors and catalog configuration; their features depend on the installed version. Sizing examples are estimates to validate with measurements.
 
@@ -19,6 +19,8 @@ Spark is a distributed processing engine for batch and streaming data. For inter
 ## 1. Architecture & Execution
 
 ### Driver, executors, and cluster manager
+
+Submitting a Spark application starts a conversation between the process planning the work and the processes executing it. The driver decides what needs to run, executors perform tasks, and a cluster manager supplies resources. Knowing which role owns a problem prevents treating every memory error or delay as an executor issue.
 
 | Component | Responsibility | Typical failure or limit |
 | --- | --- | --- |
@@ -82,7 +84,7 @@ Lineage records dependencies needed to recompute lost partitions. Executor loss 
 
 ### Catalyst, logical plans, and physical plans
 
-Catalyst represents queries as trees and applies analysis, rewrite rules, and planning. SQL and equivalent DataFrame expressions use the same optimization machinery; switching syntax alone is not a performance fix. [Catalyst design](https://www.databricks.com/blog/2015/04/13/deep-dive-into-spark-sqls-catalyst-optimizer.html).
+Writing a filter in SQL or as a DataFrame expression may produce the same execution plan. Both use **Catalyst**, which represents queries as trees and applies analysis, rewrite rules, and planning. Changing syntax alone therefore does not fix a slow query; the useful question is whether the change alters the work in the plan. [Catalyst design](https://www.databricks.com/blog/2015/04/13/deep-dive-into-spark-sqls-catalyst-optimizer.html).
 
 | Plan | Question it answers | Example |
 | --- | --- | --- |
@@ -128,7 +130,7 @@ AQE revises eligible physical plans using runtime statistics, including shuffle 
 
 ### Python, the JVM, and Py4J
 
-In classic PySpark, Python driver code uses Py4J to build and submit work to the driver JVM. Built-in DataFrame expressions normally execute in JVM operators on executors. They do not call Python once per row merely because the application is written in Python.
+A PySpark application is written in Python, but its rows do not necessarily pass through Python one at a time. In classic PySpark, driver code uses Py4J to build and submit work to the driver JVM. Built-in DataFrame expressions normally run in JVM operators on the executors. That execution boundary matters when comparing a built-in expression with a Python UDF.
 
 Python RDD functions and Python UDFs require executor-side Python workers. Functions, dependencies, and data cross a serialization boundary. Python workers can be reused, but retain their own process memory and imported libraries. [PySpark process architecture](https://spark.apache.org/docs/4.0.0/api/python/development/debugging.html).
 
@@ -174,6 +176,8 @@ Arrow batch sizing can control peak transfer memory, but it does not make `toPan
 
 ### Three meanings of partition
 
+A discussion about increasing partitions can go wrong if two people mean different things by the word. Spark execution, table layout, and Kafka each have their own partition boundary. Identify which one you are changing before predicting an effect on parallelism or data movement.
+
 - **Execution partition:** a unit of distributed processing for a stage.
 - **Storage partition:** a table layout such as directories by date or an Iceberg partition transform.
 - **Kafka partition:** an ordered source log with its own offsets.
@@ -213,6 +217,8 @@ Estimate partitions as `ceil(expected stage bytes / target bytes per partition)`
 ## 5. Joins & Aggregations
 
 ### Join algorithms
+
+To join a large orders table with customer data, Spark must arrange for matching keys to meet. It can copy a small side, shuffle and sort both sides, or build hash tables after a shuffle. The best choice depends on the actual input size and distribution, especially the memory required by the largest build partition.
 
 | Strategy | How it works | Good fit | Main risk |
 | --- | --- | --- | --- |
@@ -272,6 +278,8 @@ Here `order_id` must break timestamp ties deterministically. `ROWS` frames count
 ## 6. Memory & Resources
 
 ### JVM heap, off-heap, and Python memory
+
+An executor can be terminated even when its JVM heap appears to have room. PySpark workers, native libraries, buffers, and off-heap allocations also consume memory. Treat the container's total demand as the starting point, then identify which budget covers each part.
 
 | Memory area | Examples | Relevant controls |
 | --- | --- | --- |
@@ -335,7 +343,7 @@ Dynamic allocation changes the number of executors as demand changes. It needs a
 
 ### Parquet internals, compression, and vectorization
 
-Parquet is columnar. A file contains row groups; each row group contains column chunks divided into pages. The footer describes the schema and file metadata. This organization lets a reader fetch selected columns and use available statistics to avoid irrelevant data. Encodings such as dictionary encoding and compression are separate mechanisms. Codec choice trades CPU against storage and transfer volume; benchmark realistic reads and writes. [Parquet file format](https://parquet.apache.org/docs/file-format/).
+A revenue query may need only a few columns from a wide orders table. Parquet's layout lets the reader avoid fetching every attribute: a file contains row groups, each row group contains column chunks, and those chunks are divided into pages. The footer describes the schema and file metadata, while available statistics can rule out irrelevant data. Encoding, such as dictionary encoding, is separate from compression; choose a codec by measuring the CPU, storage, and transfer trade-off on realistic reads and writes. [Parquet file format](https://parquet.apache.org/docs/file-format/).
 
 Spark's vectorized Parquet reader decodes batches to reduce per-row overhead. Support depends on types, configuration, and reader capabilities; verify the scan plan. Columnar storage, vectorized reading, and Whole-Stage CodeGen are related optimizations at different layers. [Spark Parquet configuration](https://spark.apache.org/docs/3.5.6/sql-data-sources-parquet.html).
 
@@ -391,7 +399,7 @@ Reject or resolve duplicate/conflicting source keys deterministically before mer
 
 ### Micro-batches and triggers
 
-Structured Streaming treats a stream as an incrementally updated table. In micro-batch mode, each trigger processes a bounded input range, updates state, and writes output. The default trigger starts the next batch as soon as the previous one finishes. A processing-time trigger requests a cadence; if a batch exceeds it, batches do not stack up as overlapping executions of the same query.
+Instead of repeatedly recomputing all orders, a streaming query can maintain a result as new input arrives. **Structured Streaming** models that stream as an incrementally updated table. In micro-batch mode, a trigger processes a bounded input range, updates state, and writes output. The default starts another batch when the previous one finishes. A processing-time trigger requests a cadence, but slow batches do not pile up as overlapping executions of the same query.
 
 `availableNow=True` processes the data available for the run and terminates, potentially using multiple batches. It is useful for scheduled incremental processing. Continuous processing is a distinct mode with narrower operator support and different guarantees. [Trigger API](https://spark.apache.org/docs/3.5.6/api/python/reference/pyspark.ss/api/pyspark.sql.streaming.DataStreamWriter.trigger.html).
 
@@ -455,7 +463,7 @@ Kafka keys/values arrive as binary data and need explicit decoding and validatio
 
 ### Spark UI, plans, and metrics
 
-Start with the slow query and its critical path, then connect physical operators to stages and tasks.
+When a job slows down, begin with the query and the work on its critical path. Connect its physical operators to stages and tasks, then ask where time and data accumulate. The Spark UI views below provide different parts of that explanation; a configuration guess is useful only after it fits the evidence.
 
 | View | What to inspect |
 | --- | --- |

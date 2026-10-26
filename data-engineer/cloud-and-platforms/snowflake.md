@@ -2,7 +2,7 @@
 
 Documentation reviewed: 2026-10-21. Snowflake is a continuously updated service; feature availability, editions, regions, and billing rules can change.
 
-Snowflake is a managed cloud data platform. For a data engineering interview, explain how it separates durable storage from compute, how queries avoid unnecessary work, and how pipelines preserve correctness under retries and failures.
+An ingestion job and a dashboard can work on the same Snowflake table using separate compute resources. That separation is central to the platform, but it raises useful questions: what persists when compute stops, where do queries spend their time, and what happens when writers conflict or retry? This guide follows those boundaries from architecture to query performance, pipeline correctness, and cost.
 
 **A useful interview answer:** “Snowflake stores data centrally and lets independent compute warehouses process it. Its cloud services layer manages metadata, access, and query planning. This lets ingestion, transformation, and analytics share data while scaling compute separately.” [Architecture](https://docs.snowflake.com/en/user-guide/intro-key-concepts)
 
@@ -25,6 +25,8 @@ Examples use Snowflake SQL unless marked otherwise. They are independent teachin
 ## 1. Architecture & Fundamentals
 
 ### Storage, compute, and cloud services
+
+Suspending a warehouse stops its compute; it does not remove the tables that warehouse queried. Snowflake separates durable storage from query compute and supporting cloud services. Keeping those layers distinct helps explain both workload isolation and the costs that remain when a warehouse is idle.
 
 | Layer | Responsibility | Engineering implication |
 | --- | --- | --- |
@@ -114,6 +116,8 @@ Snowflake runs on AWS, Azure, and Google Cloud. An account has a cloud and regio
 ## 2. Storage & Data Modeling
 
 ### Permanent, transient, temporary, and external tables
+
+A scratch table and an authoritative sales table may need very different recovery protection. Snowflake's table types encode choices about lifetime, storage, and recovery. Choose the type from how the data will be used and rebuilt, rather than assuming all persisted tables have the same safeguards.
 
 | Table type | Lifetime and storage | Recovery | Typical use |
 | --- | --- | --- | --- |
@@ -205,7 +209,7 @@ A practical design keeps source payloads for replay while promoting frequently f
 
 ### Optimizer, statistics, and execution profiles
 
-At a high level, Snowflake resolves names and privileges, optimizes a logical query, and runs a distributed physical plan. The optimizer uses automatically maintained metadata/statistics to estimate work, choose join ordering, push predicates, and eliminate unnecessary scans. Users do not normally manage a manual `ANALYZE TABLE` statistics workflow for standard tables.
+A query's SQL does not prescribe every scan and join the engine will run. Snowflake resolves names and privileges, optimizes the logical query, and executes a distributed physical plan. Automatically maintained metadata and statistics help it estimate work, choose join order, push predicates, and skip unnecessary scans. Standard tables therefore do not normally require a manual `ANALYZE TABLE` workflow.
 
 `EXPLAIN` helps inspect a proposed plan; Query Profile shows what happened during execution. Estimated work can differ from runtime behavior, especially for skew, complex expressions, and intermediate result sizes. A plan alone cannot prove that a warehouse has sufficient memory. [EXPLAIN](https://docs.snowflake.com/en/sql-reference/sql/explain), [Query History and Profile](https://docs.snowflake.com/en/user-guide/ui-snowsight-activity)
 
@@ -318,7 +322,7 @@ Eligibility depends on the plan; it does not accelerate every operator or repair
 
 ### Internal and external stages
 
-A stage describes a location for files used in loading or unloading. An **internal stage** uses Snowflake-managed storage; user stages (`@~`), table stages (`@%table_name`), and named stages have different scope. An **external stage** references cloud object storage and associated access configuration.
+Before loading a file, Snowflake needs to know where it is and how access works. A **stage** describes a file location for loading or unloading. Internal stages use Snowflake-managed storage, with user (`@~`), table (`@%table_name`), and named stages providing different scopes. An external stage references cloud object storage and its access configuration.
 
 Stages hold or reference files; they do not automatically turn every file into a queryable native table. A file format defines parsing settings such as CSV delimiters, compression, or JSON behavior. Prefer reusable named formats when several pipelines share a contract. Use storage integrations for external access rather than embedding long-lived cloud credentials in SQL. [Stages](https://docs.snowflake.com/en/user-guide/data-load-overview), [storage integrations](https://docs.snowflake.com/en/sql-reference/sql/create-storage-integration)
 
@@ -453,7 +457,7 @@ When several source rows match one target row, MERGE updates/deletes can be nond
 
 ### ELT and SQL transformations
 
-ELT loads source data before transforming it with warehouse compute. A common structure has an append-only landing layer, typed/validated models, and business-facing facts and dimensions. The purpose is clear ownership and replayability, not a requirement to copy every dataset through three physical tables.
+Keeping a source extract before transforming it gives you a basis for explanation and replay. In **ELT**, data is loaded first and transformed with warehouse compute. A common flow moves from append-only landing data to typed and validated models, then business-facing facts and dimensions. Those boundaries establish ownership and replayability; they do not require three physical copies of every dataset.
 
 Use set-based SQL for joins, aggregations, deduplication, and business rules. Keep the raw source identity and ordering fields needed to explain or replay outputs. Define where malformed rows go and how they are reconciled. A successful SQL statement does not prove the business data is complete.
 
@@ -549,7 +553,7 @@ This block owns its transaction and must run outside any existing transaction. I
 
 ### ACID, MVCC, and isolation
 
-ACID means changes are atomic, respect applicable integrity rules, are isolated according to the supported isolation level, and remain durable after commit. MVCC lets queries read committed versions while writes create newer versions. It does not imply that arbitrary concurrent writes cannot block or conflict.
+If a transformation updates several rows, the transaction defines which changes commit together and what other work can observe. ACID covers atomic changes, applicable integrity rules, isolation under the supported level, and durability after commit. MVCC lets queries read committed versions while writes create new ones, but it does not eliminate blocking or conflicts between arbitrary concurrent writes.
 
 For standard tables, Snowflake uses **READ COMMITTED** isolation. A statement sees data committed before that statement began, plus earlier changes in its own transaction. Two statements in one transaction can see different externally committed data. Do not describe a normal multi-statement transaction as one immutable snapshot of every table.
 
@@ -603,7 +607,7 @@ For live-data expiration, use an explicit policy or scheduled process with a val
 
 ### RBAC, privileges, ownership, and role hierarchy
 
-RBAC assigns object privileges to roles and roles to users. Roles inherit privileges from roles granted to them. Grant a narrow access role to a broader functional role when that functional role should inherit access; reversing the grant reverses the inheritance.
+A user may hold several roles, and the direction of role grants determines which privileges they inherit. **RBAC** assigns object privileges to roles and roles to users. A role inherits from the roles granted to it: to let a functional role use a narrow access role's privileges, grant the access role to the functional role. Reversing that grant reverses the inheritance.
 
 Querying a table generally requires `USAGE` on its database/schema, `SELECT` on the table, and `USAGE` on the executing warehouse. Creating objects requires separate privileges. `OWNERSHIP` is powerful control over an object, not merely permission to read it. Managed access schemas centralize grant decisions with the schema owner or a role with `MANAGE GRANTS`.
 
@@ -673,7 +677,7 @@ Combine it with login history, grant changes, query tags, ownership, data classi
 
 ### Credits, storage, and the billing model
 
-Think in separate cost categories: warehouse compute, serverless services, billable cloud services, storage, and applicable data transfer. A credit is a usage unit, not a universal dollar price. Commercial price depends on the agreement, edition, and deployment. Use the current service consumption table for feature-specific credit rates. [Compute costs](https://docs.snowflake.com/en/user-guide/cost-understanding-compute)
+A warehouse's credit consumption is only one part of the bill. Separate warehouse compute, serverless services, billable cloud services, storage, and applicable transfer costs. A **credit** measures usage; it is not a universal dollar price. The commercial price depends on the agreement, edition, and deployment, while feature-specific rates come from the service consumption table. [Compute costs](https://docs.snowflake.com/en/user-guide/cost-understanding-compute)
 
 Warehouse compute uses per-second billing with a **60-second minimum each time compute is provisioned/resumed**. Additional resources provisioned by an upscale also have a minimum charge. Suspending a warehouse stops its compute consumption; stored data and separately running serverless services remain billable.
 
@@ -744,7 +748,7 @@ This reports warehouse consumption, not the complete invoice. Use `METERING_DAIL
 
 ### Iceberg tables and external catalogs
 
-Iceberg is an open table format using snapshots and metadata over data files, commonly Parquet. Snowflake can act as the Iceberg catalog or integrate with supported external catalogs. Distinguish **catalog ownership**, **physical storage ownership**, and **writer support**; they are separate choices.
+When Snowflake works with an Iceberg table, ask three separate questions: who owns the catalog, who owns the physical storage, and which engines may write? Iceberg defines snapshots and metadata over data files, commonly Parquet; Snowflake can act as its catalog or integrate with supported external catalogs. Those choices do not collapse catalog ownership, storage ownership, and writer support into one decision.
 
 Current options include Snowflake-managed storage as well as customer-managed external volumes. Externally stored Iceberg data does not have Snowflake Fail-safe; protection depends on the selected storage/catalog design. Snowflake-managed Iceberg tables can have different recovery support. Supported remote REST catalogs can allow writes from Snowflake, so “external catalog always means read-only” is outdated. Check catalog, format version, operations, and transaction limitations. [Iceberg tables and catalog options](https://docs.snowflake.com/en/user-guide/tables-iceberg)
 

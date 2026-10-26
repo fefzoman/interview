@@ -2,7 +2,7 @@
 
 Documentation reviewed: 2026-10-25. Service capabilities, quotas, supported engine versions, regional availability, and pricing can change. Verify them for the deployment you discuss.
 
-AWS interviews test whether you can turn data requirements into a secure, reliable, affordable system. Naming services is a starting point. A strong answer explains data flow, ownership, failure recovery, correctness, and the trade-offs behind each choice.
+A store needs yesterday's revenue ready every morning and order changes available within minutes. Which parts belong in S3, which need a processing engine, and how will the system recover a failed run? An AWS design becomes convincing when the services form an answer to those questions. This guide connects data flow, ownership, correctness, security, and cost to the choices behind a working platform.
 
 **A useful interview answer:** “I start with volume, freshness, access patterns, retention, and recovery requirements. Then I separate ingestion, durable storage, processing, orchestration, serving, and governance. I design retries and replay before choosing the final compute service.”
 
@@ -27,7 +27,7 @@ The examples below are teaching examples, not a deployment recipe. SQL dialects 
 
 ### Regions, Availability Zones, and VPCs
 
-A **Region** is a geographic deployment area. An **Availability Zone (AZ)** is an isolated location within a Region, made up of one or more data centers. Multiple AZs support resilience to a local infrastructure failure; another Region provides a separate geographic recovery boundary.
+Before choosing a service, decide what kind of infrastructure failure the design should survive. An **Availability Zone (AZ)** is an isolated location within a geographic **Region**, comprising one or more data centers. Using multiple AZs can protect against a local infrastructure failure; another Region establishes a separate geographic recovery boundary. Those placement choices shape the rest of the architecture.
 
 A **VPC** is a regional virtual network. A **subnet** occupies exactly one AZ. Putting resources in two subnets in the same AZ does not provide AZ redundancy. Choose Regions based on data residency, service availability, latency, disaster recovery, and cost. [Amazon VPC concepts](https://docs.aws.amazon.com/vpc/latest/userguide/what-is-amazon-vpc.html)
 
@@ -126,7 +126,7 @@ Secrets Manager stores and retrieves credentials or tokens and supports rotation
 
 ### S3 objects, consistency, versioning, and lifecycle
 
-S3 stores objects identified by bucket and key. A prefix resembles a directory but is part of the key. For general purpose buckets, successful object writes, overwrites, deletes, and subsequent reads/listing have strong consistency. This does not provide a transaction across several objects or make an incomplete multi-file dataset safe to publish. [S3 consistency model](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html#ConsistencyModel)
+An S3 key may look like a file path, but S3 addresses an object by its bucket and key; the prefix is part of that key. For general purpose buckets, successful writes, overwrites, and deletes are strongly consistent with subsequent reads and listing. That makes an individual object's state easier to reason about, but it does not turn several object writes into one transaction or make a partially written dataset safe to publish. [S3 consistency model](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html#ConsistencyModel)
 
 **Versioning** preserves separate object versions. An ordinary delete in a versioned bucket generally adds a delete marker; permanently deleting a specific version removes that version. **Lifecycle rules** transition or expire eligible objects and can manage noncurrent versions and incomplete multipart uploads. Retained versions consume storage. Versioning supports recovery, but permissions and retention still determine whether destructive actions are possible. [S3 Versioning](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html), [S3 Lifecycle](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html)
 
@@ -203,7 +203,7 @@ Snapshot expiration and orphan removal can permanently remove recovery data. Nev
 
 ### AWS Glue Spark jobs and workers
 
-Glue is managed data integration compute, commonly used for Spark ETL alongside the Data Catalog. The driver plans work; executors run distributed tasks. The Glue version determines the Spark/Python environment and bundled integrations. Pin that environment instead of assuming a job behaves identically after a runtime upgrade.
+When a transformation needs distributed Spark processing, Glue can provide managed data integration compute alongside the Data Catalog. The driver plans the work and executors run its tasks. The selected Glue version sets the Spark/Python environment and bundled integrations, so pin that environment: a runtime upgrade is a change to the job's behavior, not just an infrastructure detail.
 
 General-purpose **G workers** and memory-oriented **R workers** address different resource needs. Standard DPUs represent compute and memory capacity; memory-optimized workers have a different memory allocation. Worker count, per-worker resources, and available task parallelism jointly determine useful capacity. [Glue worker types](https://docs.aws.amazon.com/glue/latest/dg/worker-types.html)
 
@@ -282,7 +282,7 @@ Retry transient throttling and connectivity errors with backoff and jitter. Boun
 
 ### Kinesis Data Streams
 
-Kinesis Data Streams is a retained record stream with shards, partition keys, sequence numbers, and consumers. A partition key determines shard placement. Retention supports replay; checkpoints record consumer progress. Provisioned and on-demand capacity modes change capacity management, but a badly skewed key can still constrain throughput. [Kinesis concepts](https://docs.aws.amazon.com/streams/latest/dev/key-concepts.html)
+If order events must remain available while consumers fall behind, a retained stream gives them a recovery boundary. **Kinesis Data Streams** organizes records into shards, using partition keys for placement and sequence numbers for positions. Retention enables replay and checkpoints track consumer progress. Provisioned and on-demand modes change capacity management, but neither removes the throughput constraint of a badly skewed key. [Kinesis concepts](https://docs.aws.amazon.com/streams/latest/dev/key-concepts.html)
 
 Ordering is scoped to a shard's record sequence, not the entire stream or arbitrary business-event time. Producer concurrency, batching, and retries affect observed ordering. A retry after an uncertain acknowledgment can create duplicate records with different sequence numbers. Carry a stable business event ID when duplicates matter. [Kinesis duplicate handling](https://docs.aws.amazon.com/streams/latest/dev/kinesis-record-processor-duplicates.html)
 
@@ -353,7 +353,7 @@ Monitor consumer lag/iterator age, throttling, oldest-message age, sink latency,
 
 ### Redshift architecture, RA3, and Serverless
 
-Redshift is a columnar, massively parallel analytical database. In the provisioned architecture, the leader plans and coordinates queries while compute nodes execute distributed work. Rows are spread across compute slices. Large scans and joins benefit from parallelism; skew and redistribution can dominate runtime. Redshift has PostgreSQL ancestry but different SQL, storage, and operational behavior. [Redshift architecture](https://docs.aws.amazon.com/redshift/latest/dg/c_high_level_system_architecture.html)
+A warehouse query may need to scan and join far more rows than an operational lookup. Redshift tackles that work with columnar storage and massively parallel execution. In a provisioned cluster, the leader plans and coordinates queries while compute nodes execute work across slices. Parallelism helps large scans and joins, but skew and redistribution can dominate runtime. PostgreSQL ancestry does not make Redshift's SQL, storage, or operations identical to PostgreSQL. [Redshift architecture](https://docs.aws.amazon.com/redshift/latest/dg/c_high_level_system_architecture.html)
 
 **RA3** nodes use managed storage, separating compute sizing from durable storage growth. Local SSDs cache data while managed storage uses S3. RA3 is an important interview topic, but it is not the only current node family; discuss the selected generation explicitly. [Provisioned node and storage options](https://docs.aws.amazon.com/redshift/latest/mgmt/working-with-clusters.html)
 
@@ -433,7 +433,7 @@ This is a starting hypothesis, not a size-based rule. Redshift can query lake da
 
 ### DMS full load, CDC, and replication tasks
 
-AWS Database Migration Service moves data from supported sources to supported targets. In the conventional replication-instance model, source and target endpoints describe connections; a replication task defines table selection, transformations, and execution behavior. DMS also has a serverless replication model, so distinguish the deployment being discussed.
+Moving existing rows and then keeping up with changes are related but separate tasks. AWS Database Migration Service supports transfers between supported sources and targets. In the conventional replication-instance model, endpoints describe source and target connections, while a replication task selects tables and defines transformations and execution behavior. DMS also offers a serverless model, so establish which deployment you mean before describing its components.
 
 | Mode | What it does | What to plan |
 | --- | --- | --- |
@@ -495,7 +495,7 @@ At-least-once transport can produce exactly-once effects when the target atomica
 
 ### MWAA and Step Functions
 
-MWAA runs managed Apache Airflow environments. It fits Python DAGs, dependency management, scheduled data intervals, and workflows spanning many systems. Keep heavy data processing on appropriate external compute; passing huge datasets through the scheduler or task metadata store harms orchestration. An Airflow task should know which data interval it is processing, independent of the wall clock when a retry runs. [Amazon MWAA](https://docs.aws.amazon.com/mwaa/latest/userguide/what-is-mwaa.html)
+A workflow may need to load one data interval, wait for a processing job, validate output, and publish only after success. MWAA provides managed Apache Airflow for Python DAGs, dependencies, and workflows spanning systems. Keep large datasets on the appropriate processing engines rather than in the scheduler or task metadata store, and derive a task's input from its data interval so a later retry processes the intended data. [Amazon MWAA](https://docs.aws.amazon.com/mwaa/latest/userguide/what-is-mwaa.html)
 
 Step Functions defines state-machine workflows with service integrations, branching, retries, catches, and supported wait/callback patterns. It is useful when the workflow naturally coordinates AWS APIs and jobs.
 
@@ -552,7 +552,7 @@ Define per-task timeouts, total workflow deadlines, retryable errors, cleanup be
 
 ### RDS and Aurora: replication, backups, and performance
 
-RDS manages relational database infrastructure, but customers still design schemas, indexes, queries, connection usage, and recovery. Operational extraction can harm OLTP performance through long scans, locks, replica lag, or retained transaction logs.
+A managed database still shares capacity with the work you send to it. RDS operates relational database infrastructure, while customers remain responsible for schemas, indexes, queries, connection usage, and recovery design. A large extraction can harm the operational workload through long scans, locks, replica lag, or retained transaction logs, so source impact belongs in the ingestion plan.
 
 In a conventional **RDS Multi-AZ DB instance deployment**, a synchronous standby supports failover and does not serve read traffic. Read replicas generally provide asynchronous read scaling. **Multi-AZ DB clusters** are a different architecture and can have readable instances; do not generalize the single-standby limitation to every RDS deployment. [RDS Multi-AZ instance deployments](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZSingleStandby.html)
 
@@ -603,7 +603,7 @@ Use bounded connection pools, connection reuse, and a supported proxy where usef
 
 ### CloudWatch metrics, logs, and alarms
 
-Metrics are time-series measurements; logs preserve detailed events; alarms evaluate conditions and notify or trigger actions. Dimensions identify metric series, so a high-cardinality field such as request ID is usually better in logs than as a metric dimension. Choose periods, percentiles, and missing-data handling that match the failure you need to detect. [CloudWatch metric concepts](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html)
+When a pipeline misses its deadline, you need both a trend that reveals the delay and detailed events that explain it. **Metrics** are time-series measurements, **logs** preserve event detail, and **alarms** evaluate conditions to notify or trigger action. Metric dimensions identify distinct series, so request IDs usually belong in logs instead. Choose periods, percentiles, and missing-data behavior around the failure you intend to detect. [CloudWatch metric concepts](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html)
 
 Monitor platform health and data outcomes together:
 
@@ -671,6 +671,8 @@ Use a representative benchmark with fixed inputs and report duration, resource u
 ## 10. Infrastructure & Production
 
 ### Terraform, CloudFormation, and CDK
+
+A data platform needs a reproducible way to create resources and review later changes. Terraform, CloudFormation, and CDK express that intent at different levels, but each still needs careful handling of state, replacements, and retained data. Choose with those operational responsibilities in view.
 
 | Tool | Model | Operational concern |
 | --- | --- | --- |
@@ -748,7 +750,7 @@ Private networking reduces exposure but does not replace authorization. Encrypti
 
 ### A repeatable interview method
 
-Before drawing boxes, establish:
+Before drawing the service boxes, establish what must travel through them and what the finished system must guarantee. A batch report and a low-latency change stream can share components while needing different recovery and publication rules. Begin with these requirements:
 
 - Sources, formats, daily volume, peak event rate, and growth.
 - Freshness and correctness requirements, including late events and deletes.
@@ -865,6 +867,8 @@ For each proposed design, answer: what happens at ten times peak traffic, during
 ## 12. Interview Practice
 
 ### Questions to answer aloud
+
+Use these questions to rehearse a path through a system, rather than a definition for each service. When a read is denied, follow every authorization boundary; when a write is repeated, find the durable effect and acknowledgment. Each answer should identify the evidence that would confirm your explanation.
 
 1. A role can assume a cross-account role but cannot read an encrypted object. Trace all authorization checks.
 2. What is the difference between a public subnet, NAT, and a VPC endpoint?

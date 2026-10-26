@@ -1,6 +1,6 @@
 # Database & DWH Engine Internals: Data Engineer Interview Guide
 
-A database engine turns SQL into reads and writes while preserving the visibility, durability, and recovery guarantees promised to applications. In an interview, explain both the mechanism and its consequence: which work becomes cheaper, which work moves into the background, and what happens when a transaction or server fails.
+The same orders table can serve two very different requests: find one customer's purchase, or total a year's revenue. Both arrive as SQL, yet the engine may read, organize, and process the data in entirely different ways. To understand those choices, follow a query below the SQL surface—from storage layout and indexes to transaction visibility, execution, and recovery.
 
 **Scope:** Platform-neutral fundamentals with explicitly labeled PostgreSQL 18, RocksDB, and DuckDB examples. Product documentation was checked on October 25, 2026. Implementation details vary by engine, version, configuration, and deployment. SQL snippets illustrate individual concepts; they are not a complete runnable database setup.
 
@@ -23,7 +23,7 @@ A database engine turns SQL into reads and writes while preserving the visibilit
 
 ### Physical layout
 
-**Row-oriented storage** places a record's attributes together. **Column-oriented storage** places values from the same column together within a storage unit, such as a row group or segment. A columnar table is usually many bounded groups of column chunks, rather than one enormous file per column.
+When you fetch one order, having its attributes together is convenient. When you total revenue across millions of orders, reading unrelated attributes wastes work. **Row-oriented storage** puts a record's attributes together, while **column-oriented storage** groups values from the same column within units such as row groups or segments. A columnar table is therefore usually many bounded groups of column chunks, rather than one enormous file for each column.
 
 For three orders, the conceptual layouts are:
 
@@ -82,7 +82,7 @@ Parquet is a concrete example of column chunks grouped into row groups, with fil
 
 ### B-Tree and B+ tree
 
-A **B-Tree** maintains ordered keys in a balanced structure with many children per internal node. Database indexes commonly use a **B+ tree** variant: internal pages route searches, while leaf pages contain keys and record references or records, depending on the engine. Linked leaves support ordered range scans.
+To find an order by ID, the engine needs a way to reach its key without examining every order. A **B-Tree** keeps keys ordered in a balanced structure with many children per internal node. Database indexes commonly use a **B+ tree** variant: internal pages route the search, and leaf pages hold keys with record references or the records themselves, depending on the engine. Links between leaves also make ordered range scans practical.
 
 For `order_id = 103`, the engine descends from root to leaf and locates the key. For an ID range, it finds the first matching leaf entry and walks forward. High fan-out keeps the tree shallow; cached upper levels can make most traversal work memory-resident.
 
@@ -154,7 +154,7 @@ B-Tree and LSM describe how ordered data is maintained; bitmap describes a membe
 
 ### What WAL guarantees
 
-**Write-ahead logging (WAL)** records enough information to recover changes after failure. Its central ordering rule is that the recovery log for a change must be durable before the corresponding changed data page is written to persistent storage. Modifying an in-memory page before its WAL is durable is allowed; flushing that page early is not.
+Suppose a database reports that an order was saved, then loses power before its changed data page reaches disk. **Write-ahead logging (WAL)** makes that recovery possible by recording enough information to reconstruct changes. Its central rule concerns write order: the recovery log for a change must be durable before the corresponding changed data page reaches persistent storage. The engine can modify a page in memory earlier; it cannot safely flush that page ahead of the required log.
 
 With durable local commit settings, the required log records, including the commit record, reach durable storage before the database acknowledges success. Data pages can be flushed later. **Group commit** lets multiple transactions share a log synchronization, reducing the cost per transaction. [PostgreSQL WAL introduction](https://www.postgresql.org/docs/18/wal-intro.html).
 
@@ -213,6 +213,8 @@ WAL supports recovery and can feed physical replication or logical decoding. A C
 ## 4. MVCC, Transaction Isolation, and Locking
 
 ### ACID and transaction boundaries
+
+An order update is useful only if its guarantees match what the application expects. Can half the transaction survive? Can another transaction see an intermediate state? Will an acknowledged commit survive a crash? ACID gives names to these questions, but the transaction boundary and engine configuration determine what the application actually receives.
 
 | Property | Meaning | Engineering implication |
 | --- | --- | --- |
@@ -313,7 +315,7 @@ Transaction retries must preserve application semantics. Retrying only the last 
 
 ### Why deleted data can remain on disk
 
-A logical delete changes what readers can see. Physical reclamation happens later because an older snapshot, recovery process, replica, or supported historical query may still need the old representation. Maintaining read performance can also require reorganizing the remaining data.
+Delete a million rows and you may find that the database file barely shrinks. The delete changed what readers can see; reclaiming the bytes is a separate job. An older snapshot, recovery process, replica, or supported historical query may still need the old representation. Even after that need ends, the engine may have to reorganize the remaining data to keep reads efficient.
 
 Three tasks are related but distinct:
 
@@ -369,7 +371,7 @@ File merging, sorting, garbage collection, and statistics refresh are not necess
 
 ### From SQL to a physical plan
 
-A typical query passes through:
+Between writing a query and receiving its result, the engine must establish what the query means and choose how to do the work. A useful way to follow that journey is through four stages:
 
 1. **Parsing and binding:** check syntax, resolve tables and columns, validate types and permissions.
 2. **Logical rewriting:** simplify expressions and transform the relational plan while preserving semantics.
@@ -449,7 +451,7 @@ For distributed warehouse plans, also inspect bytes scanned, partitions pruned, 
 
 ### Buffer pools and the memory hierarchy
 
-A **buffer pool** holds database pages in engine-managed memory. A read locates or loads a page and pins it while needed. A modification marks it dirty. Eviction selects an unpinned page; a dirty page must be persisted safely before its memory can be reused, including satisfying WAL ordering.
+An order lookup need not reach disk every time. A **buffer pool** keeps database pages in engine-managed memory, where a read can locate or load a page and pin it for use. Updates mark pages dirty. When the engine needs to reuse memory, it selects an unpinned page; a dirty page must first be persisted safely, including meeting WAL's write-ordering rule.
 
 Replacement policies such as clock or LRU variants approximate which pages will be useful again. A large sequential scan can evict frequently used pages unless the engine uses scan-resistant policies or separate strategies.
 
@@ -511,7 +513,7 @@ For a slow revenue query, establish whether time is spent queueing, planning, re
 
 ### What is replicated
 
-**Replication** maintains additional copies of state or changes. It can improve availability and read capacity, but its guarantees depend on ordering, acknowledgment, read routing, and promotion rules.
+A second copy of the database sounds like an obvious safety net, but its usefulness depends on what it has received and when it can take over. **Replication** maintains additional copies of state or changes to improve availability or read capacity. Ordering, acknowledgments, read routing, and promotion rules determine the guarantees; the existence of a copy alone does not.
 
 | Form | Representation | Typical implication |
 | --- | --- | --- |
@@ -590,6 +592,8 @@ For warehouse publication, a consistent table snapshot, a durable replicated com
 
 ### One read through the engine
 
+Now follow one request through the whole engine: calculate revenue from the orders visible to a transaction. The plan determines how to find and combine the data, the snapshot determines which versions count, and the cache determines how much storage access is necessary. The diagram connects the mechanisms covered so far.
+
 ```mermaid
 flowchart LR
     A[SQL] --> B[Parse and bind]
@@ -630,6 +634,8 @@ Treat these as hypotheses, not diagnoses. Establish the bottleneck or correctnes
 ## 10. Interview Practice
 
 ### A structure for technical answers
+
+For practice, take an ordinary order lookup and explain what the engine does from start to finish. Then change one condition: the relevant page is missing from cache, another transaction updates the order, or the server crashes during a write. A clear answer connects the mechanism to the changed outcome. Use the sequence below to keep that explanation grounded.
 
 1. **Define the mechanism:** name the data structure or protocol and its invariant.
 2. **Walk through an operation:** use one order lookup, update, scan, or failure.
