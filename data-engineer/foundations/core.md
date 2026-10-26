@@ -58,11 +58,28 @@ Causality comes from program order, communication, and transitive dependencies. 
 
 **Consensus** lets nodes agree on a value despite failures. Repeated agreement can establish a replicated log whose commands are applied in the same order by deterministic state machines.
 
-**Raft** separates leader election, log replication, and safety. A leader operates in a numbered term and replicates entries to followers. Elections require a majority and restrict which logs can win. Committing an entry from the leader's current term requires majority replication; earlier entries become committed through the protocol's rules. A follower's acknowledgment alone is not a commit.
+Raft and Paxos are distributed consensus algorithms that allow multiple nodes to agree on a consistent state, even when some nodes fail or network communication is disrupted.
 
-**Paxos** uses proposers, acceptors, and learners. Prepare/promise and accept phases use numbered proposals and intersecting quorums so a later proposal preserves an already chosen value. Basic Paxos chooses one value; Multi-Paxos applies the idea to a sequence and can reduce overhead with a stable leader.
+Both typically require a majority quorum to make progress.
+1. Raft — Leader-Based Consensus
+Raft is designed to be relatively easy to understand and implement.
 
-Both protect safety in their crash-failure models despite delays and message loss; progress needs enough reachable participants and suitable timing conditions. They do not tolerate arbitrary malicious behavior by default. [Raft paper](https://raft.github.io/raft.pdf), [Paxos Made Simple](https://lamport.azurewebsites.net/pubs/paxos-simple.pdf).
+How it works:
+1. Leader Election: Nodes elect one leader using majority voting.
+2. Log Replication: All writes go through the leader.
+3. Consensus: The leader replicates log entries to followers.
+4. Commit: Once a majority acknowledges an entry, the leader can commit it.
+5. Failure Recovery: If the leader fails, followers elect a new leader.
+
+2. Paxos — Quorum-Based Consensus
+Paxos focuses on ensuring that distributed nodes agree on a single value despite failures.
+
+How basic Paxos works:
+1. Prepare: A proposer sends a proposal number to acceptors.
+2. Promise: A majority promises not to accept older proposals.
+3. Accept: The proposer requests acceptance of a value consistent with earlier accepted proposals.
+4. Chosen: Once a majority accepts the value, it is chosen.
+Unlike Raft, basic Paxos does not require a permanent leader, although practical variants such as Multi-Paxos commonly use a stable leader for efficiency.
 
 ### Leader election, quorum, replication
 
@@ -82,7 +99,6 @@ A **network partition** prevents some nodes from communicating while others may 
 
 **Example:** The database commits an order but its response disappears. The caller sees a timeout even though the order exists. Retrying with a new order ID creates a duplicate. Preserve the operation ID and query or retry using that identity.
 
-**Interview check:** In a five-node cluster split into groups of three and two, explain which side can commit majority-based writes, what the minority returns, and how an old leader is fenced.
 
 ### Fault tolerance, retries, idempotency
 
@@ -92,7 +108,7 @@ A **retry** repeats an operation after a transient failure or uncertain outcome.
 
 An operation is **idempotent** when repeating it has the same intended effect as applying it once. Setting an order's status to a specified value can be idempotent; incrementing revenue is not. Even an idempotent status update needs version checks to prevent an old event from overwriting a newer status.
 
-For a payment-like operation, use a stable idempotency key, enforce its uniqueness, and atomically record the key with the business change. A separate “check whether processed” followed by an unprotected write has a race.
+Use a stable idempotency key, enforce its uniqueness, and atomically record the key with the business change. A separate “check whether processed” followed by an unprotected write has a race.
 
 ## 2. Distributed Data Processing
 
@@ -106,7 +122,7 @@ Once the orders no longer fit comfortably on one worker, you need to divide the 
 | Range partitioning | Efficient range access and ordered scans | Uneven ranges or append-heavy keys create hotspots |
 | Round-robin partitioning | Spreads rows without a key dependency | Equal keys need reshuffling before joins or aggregations |
 
-Choose the key around access patterns and distribution. Partitioning orders by customer can colocate customer history, while one large customer can dominate a shard. A date directory in a lake is a partition layout; it does not necessarily correspond to a dedicated server.
+Choose the key around access patterns and distribution. Partitioning orders by customer can colocate customer history, while one large customer can dominate a shard.
 
 ### Data locality, shuffle, distributed joins
 
@@ -120,17 +136,11 @@ A **shuffle** redistributes rows between workers, usually by a join or grouping 
 | Repartitioned join | Shuffle both sides by compatible join keys | Network cost, skew, and spill |
 | Colocated join | Match already compatible data distributions | Matching keys, partitioning rules, and placement are required |
 
-Filter and select needed columns before data movement when semantics allow. A broadcast join is a distribution choice; each worker may execute a local hash join. Compressed file size is not the build hash table's memory size.
-
 ### Parallelism, concurrency, scheduling
 
 **Concurrency** means multiple tasks are in progress during overlapping periods. **Parallelism** means multiple tasks execute simultaneously. An asynchronous reader can handle concurrent requests on one CPU; several workers can process partitions in parallel.
 
 A **scheduler** maps runnable tasks onto available resources while honoring dependencies, capacity, fairness, and placement constraints. Too few tasks underuse the cluster; too many tiny tasks spend time on coordination and setup. More concurrent jobs can reduce throughput per job by competing for memory and I/O.
-
-**Speculative execution** starts another attempt of a slow task. It helps with an unusually slow host but often wastes capacity for deterministic skew. Output commits must ensure multiple attempts do not publish duplicate effects.
-
-**Example:** A stage with eight runnable partitions cannot keep 100 single-task slots busy. Increasing partition count may help, provided task overhead and the next stage's distribution do not erase the benefit.
 
 ### MapReduce, DAG execution models
 
@@ -157,15 +167,11 @@ Batch usually makes complete recomputation and large sequential scans easier. St
 
 **Event time** is when an event occurred; **processing time** is when an operator handles it. A watermark estimates event-time progress so windows can advance. It is a policy about expected lateness, not proof that no older event can arrive. Define whether late changes update previous results, go to a correction path, or are rejected with monitoring.
 
-**Example:** Daily financial totals may use batch reconciliation even when a stream supplies provisional revenue every minute.
-
 ### Backpressure, checkpointing, recovery
 
 **Backpressure** limits upstream production when downstream cannot keep up. Bounded queues and flow control keep memory finite, but backlog moves to another layer, such as the source broker. If average arrival rate stays above processing capacity, backlog continues growing.
 
 A **checkpoint** captures recoverable operator state and input progress at a consistent boundary. After failure, the engine restores that state and replays input from the recorded positions. Checkpoints require durable storage and replayable input; source retention must cover recovery delay.
-
-In Flink, checkpoint barriers coordinate distributed snapshots. Exactly-once state recovery does not mean each record executes only once; replay may occur. End-to-end output guarantees also require appropriate source and sink behavior. [Flink stateful stream processing](https://nightlies.apache.org/flink/flink-docs-stable/docs/concepts/stateful-stream-processing/).
 
 Frequent checkpoints reduce replay work but add overhead. Recovery time includes detecting failure, allocating resources, restoring state, and catching up. A checkpoint also preserves bad state, so it is not a substitute for historical backups or reconciliation.
 
@@ -180,8 +186,6 @@ Frequent checkpoints reduce replay work but add overhead. Recovery time includes
 **Ordering** must name its scope: connection, partition, key, or entire dataset. Per-partition order does not create global order. Independent retries or concurrent consumers can change the order in which effects appear.
 
 **Deduplication** needs stable event identity and durable state. A TTL-bounded set forgets old IDs, so a replay older than its retention can reapply effects. For changing entities, also compare source versions or sequence numbers; different events for the same order are not necessarily duplicates.
-
-**Interview check:** A worker writes revenue, crashes before acknowledging the input, and receives it again. Explain exactly where deduplication and the revenue update become atomic.
 
 ## 3. Distributed Transactions & Exactly-Once Effects
 
@@ -227,29 +231,191 @@ When writing a database and publishing an event, a **transactional outbox** stor
 
 Reading a large file from beginning to end and fetching thousands of scattered records put very different demands on storage. On a **hard disk drive (HDD)**, each scattered access can require a seek and rotational wait. A **solid-state drive (SSD)** removes those mechanical delays and supports far more random I/O, but still has limits: controller queues, flash management, endurance, and bandwidth all affect the result.
 
-**Sequential I/O** accesses contiguous regions and amortizes per-operation overhead. **Random I/O** touches scattered locations. Compare throughput in bytes per second with **IOPS**, operations per second, and state the request size: 10,000 small reads and 10,000 large reads represent different bandwidth requirements.
+Sequential I/O and Random I/O describe how a computer reads or writes data on a storage device (HDD, SSD, NVMe).
 
-An SSD does not make access patterns irrelevant. Columnar scans favor large reads, while poorly localized index probes can produce many small requests. Remote storage adds network and request overhead even when its backing media are fast.
+The fundamental difference is the pattern of accessing data.
+- Sequential I/O: Data is accessed in consecutive storage locations.
+- Random I/O: Data is accessed at scattered, non-consecutive storage locations.
+
+**How Sequential I/O works**
+Imagine reading a 1 GB file stored in consecutive blocks.
+Disk:
+[Block 0][Block 1][Block 2][Block 3][Block 4]
+
+Read order:
+    0 → 1 → 2 → 3 → 4
+
+
+The operating system can optimize these operations through:
+- Read-ahead: Prefetch upcoming blocks before the application requests them.
+- Request merging: Combine adjacent I/O requests into larger operations.
+- Large transfer sizes: Read 1 MB or more per request instead of thousands of tiny requests.
+Typical workloads include reading CSV or Parquet files, backups, log ingestion, and full table scans.
+
+**How Random I/O works**
+Imagine a database retrieving individual records from different storage locations.
+Disk:
+[Block 0][Block 1][Block 2][Block 3][Block 4]
+[Block 5][Block 6][Block 7][Block 8][Block 9]
+
+Read order:
+    8 → 2 → 9 → 1 → 6
+
+
+Each operation may involve a different location, making prefetching and request merging harder.
+
+Typical workloads include database index lookups, small record updates, and key-value store operations.
 
 ### Block storage vs. object storage vs. file storage
+The fundamental difference is how data is organized, addressed, and accessed.
+- Block storage: Data is divided into fixed-size blocks, accessed by block address.
+- File storage: Data is organized into files and directories, accessed by path.
+- Object storage: Data is stored as objects containing content, metadata, and an identifier, accessed through an API.
 
-| Type | Interface and abstraction | Common use | Important constraint |
+**Block storage**
+
+├── customers/
+│   ├── 2026-10.parquet
+│   └── 2026-09.parquet
+└── transactions/
+    └── 2026-10.parquet
+
+Applications access files through paths and operations such as open(), read(), write(), and close().
+
+With network file storage, multiple machines can access a shared filesystem through protocols such as NFS or SMB.
+
+Examples: AWS EFS, Amazon FSx, Azure Files, NFS servers.
+
+**Object storage**
+
+An object typically consists of a key, data, and metadata.
+Bucket: analytics-lake
+
+Key:
+  silver/customers/part-0001.parquet
+
+Data:
+  <Parquet binary content>
+
+Metadata:
+  Content-Type: application/octet-stream
+  ETag: ...
+
+Objects are accessed through an API, for example:
+GET /silver/customers/part-0001.parquet
+PUT /silver/customers/part-0001.parquet
+DELETE /silver/customers/part-0001.parquet
+
+Unlike a regular filesystem, object storage generally does not support modifying arbitrary bytes in an existing object. Updating usually requires replacing the object.
+
+Examples: Amazon S3, Google Cloud Storage, Azure Blob Storage, MinIO.
+
+**Performance characteristics**
+
+| Workload | Block | File | Object |
 | --- | --- | --- | --- |
-| Block storage | Addressable blocks exposed as a device | Database volumes and filesystems | Filesystem and application must manage structure and coordination |
-| File storage | Paths, directories, and filesystem operations | Shared directories and applications expecting file APIs | Locking, rename, caching, and durability semantics vary |
-| Object storage | Key-addressed objects and metadata through service APIs | Data lakes, archives, and backups | Do not assume POSIX rename, in-place update, or cross-object transactions |
-
-Choose by access semantics as well as price and capacity. A filesystem mount over an object API does not automatically provide the semantics required by a traditional database engine.
+| Random 4 KB reads | Excellent | Good | Poor |
+| Small random writes | Excellent | Good | Poor |
+| Large sequential reads | Excellent | Excellent | Excellent |
+| Frequent in-place updates | Excellent | Good | Poor |
+| Millions of independent files/objects | Depends on filesystem | Metadata can become bottleneck | Designed for massive object counts |
+| Shared access across servers | Requires coordination | Native strength | API-based access |
+| Large immutable datasets | Works | Works | Excellent |
 
 ### HDFS, S3, distributed file systems
 
-A **distributed file system** presents files whose content or metadata spans machines. It must handle placement, metadata consistency, failed nodes, and reconstruction or replication.
+HDFS — distributed block storage exposed as files
+Files are split into blocks, distributed and replicated across DataNodes. The NameNode tracks the filesystem namespace and block locations.
+S3 — distributed object storage
+S3 exposes objects via an API. AWS manages internal metadata, placement, redundancy, and failure recovery; the diagram is conceptual, not its internal topology.
+2. HDFS internal mechanisms
+HDFS (Hadoop Distributed File System) is designed for storing large files and providing high-throughput, distributed data access.
+Component	Responsibility
+NameNode	Filesystem namespace, file-to-block mapping, block locations
+DataNode	Physical block storage, block reads/writes, heartbeats
+Standby NameNode	High availability through failover
+JournalNodes	Maintain shared edit logs for HA
+Block	Unit of file distribution, commonly 128 MB or larger
+Rack awareness	Distributes replicas across failure domains
 
-**HDFS** uses a NameNode for namespace and block metadata, and DataNodes for block storage. Clients obtain locations from metadata services and transfer data with DataNodes. Large blocks and distributed replicas suit high-throughput access; high availability for metadata needs an appropriate configuration. Many tiny files create metadata and scheduling overhead. [HDFS architecture](https://hadoop.apache.org/docs/stable/hadoop-project-dist/hadoop-hdfs/HdfsDesign.html).
+HDFS read and write paths
+Write path — replication factor 3
+The client asks the NameNode for target DataNodes, then streams blocks through a replication pipeline. The NameNode does not carry file data.
+Read path: The client requests block locations from the NameNode, then reads blocks directly from DataNodes, preferably nearby replicas.
 
-**Amazon S3** exposes object keys rather than HDFS blocks or a general POSIX filesystem. It provides strong read-after-write consistency for object writes and deletes, including subsequent GET and LIST operations. Single-key updates are atomic, but S3 does not provide a general atomic transaction across keys. Table-level transactions require a higher-level protocol. Cross-region replication is a separate concern. [S3 consistency model](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html#ConsistencyModel).
+Important implementation details include:
+- Heartbeats and block reports: DataNodes report health and stored blocks to the NameNode.
+- Failure recovery: Missing replicas are detected and re-created on healthy nodes.
+- Checksums: Detect corrupted data blocks.
+- Safe mode: The NameNode temporarily restricts block changes during startup or recovery.
+- High availability: Active and standby NameNodes prevent a single NameNode failure from making the cluster unavailable.
+- Erasure coding: Reduces storage overhead for suitable datasets compared with triple replication, at the cost of reconstruction and computation.
+HDFS traditionally emphasizes write-once, read-many workloads. It supports append with restrictions but not arbitrary in-place modifications like a local filesystem.
+3. Amazon S3 internal mechanisms
+S3 is an API-based object store, organized around buckets and object keys.
+s3://analytics-lake/
+  └── transactions/       └── year=2026/            └── month=10/                 ├── part-001.parquet                 └── part-002.parquet
 
-**Interview pitfall:** Calling all object stores eventually consistent, or assuming a “rename directory” operation atomically commits a dataset, gives the wrong correctness model.
+
+A key such as transactions/year=2026/part-001.parquet is not a physical filesystem path. Prefixes emulate directory organization.
+
+Core properties:
+Property	Amazon S3
+Interface	HTTP REST API
+Read operations	GET, HEAD, ranged GET
+Write operations	PUT, multipart upload
+Rename	Usually copy followed by delete
+In-place updates	Not supported
+Consistency	Strong read-after-write for object PUT/DELETE and LIST
+Durability	S3 Standard designed for 99.999999999%
+Availability	S3 Standard designed for 99.99%
+Redundancy	Automatically across multiple Availability Zones in a Region for S3 Standard
+
+S3 object writes are atomic at the individual-object level. However, S3 does not provide multi-object ACID transactions.
+
+This distinction explains why lakehouse systems such as Apache Iceberg require a transactional metadata layer over S3.
+4. HDFS vs. S3
+Dimension	HDFS	S3
+Storage model	Files and blocks	Objects
+Infrastructure	Typically self-managed cluster	Managed cloud service
+Scaling	Add DataNodes; manage metadata capacity	Service-managed
+Metadata	NameNode	S3-managed
+Data locality	Available to colocated compute	Network access
+Random writes	No arbitrary overwrite	No in-place overwrite
+File rename	Filesystem metadata operation	Copy + delete for object keys
+Directory semantics	Real directories	Prefix-based namespace
+Consistency	Strong filesystem metadata semantics	Strong object consistency
+Failure recovery	Replication / erasure coding	S3-managed redundancy
+Compute coupling	Can be colocated	Independent
+Typical use	Hadoop clusters	Cloud data lakes and lakehouses
+
+5. Distributed file systems beyond HDFS
+System	Architecture	Best-fit workload
+HDFS	NameNode + DataNodes	Large-scale Hadoop processing
+CephFS	Metadata servers + RADOS storage	General-purpose distributed POSIX files
+Lustre	Metadata servers + object storage targets	HPC and parallel scientific computing
+GlusterFS	Distributed brick-based architecture	Scale-out shared file storage
+Amazon EFS	Managed NFS filesystem	Shared AWS application files
+Google Filestore	Managed NFS	Shared application and analytics storage
+
+The critical differences are POSIX semantics, metadata architecture, caching, consistency, scalability, and the extent to which applications can exploit data locality.
+6. Performance and architectural trade-offs
+Data locality
+HDFS can schedule processing on or near nodes holding the corresponding blocks.
+
+S3 decouples compute from storage, allowing independent scaling. Its performance depends on network throughput, request concurrency, object sizes, and efficient range reads.
+Small-file problem
+Both HDFS and S3 suffer from excessive small files, but for different reasons.
+
+In HDFS, each file and block consumes NameNode metadata memory. In S3, small files increase request overhead, listing/metadata processing, and the number of tasks a processing engine must schedule.
+
+For a data lake, compaction is typically required to maintain efficient query performance.
+Commit semantics
+HDFS can rename files efficiently within its namespace, which historically helped Hadoop commit protocols.
+
+In S3, renaming a file generally requires copying the object and deleting the original. This makes traditional rename-based committers inefficient and potentially unsafe.
+
+Modern lakehouse architectures use formats such as Iceberg, Delta Lake, or Hudi with transaction protocols designed for object storage.
 
 ### Row vs. columnar formats: Avro, Parquet, ORC
 
@@ -263,11 +429,43 @@ Avro also has reader/writer schema resolution rules for compatible evolution. Pa
 
 None of these formats alone supplies concurrent table commits, complete table history, or a multi-file transaction log. A table format or database protocol adds those capabilities above the files.
 
-### Compression, encoding, dictionary encoding
+### Compression and encoding
 
 **Encoding** represents values efficiently by exploiting structure. Examples include run-length encoding for repeated values, delta encoding for nearby numbers, and bit packing for small integer ranges. **Dictionary encoding** maps repeated values to compact IDs plus a dictionary; it works well when repetition offsets the dictionary's size.
 
-**Compression** applies a codec to encoded data or blocks. It trades CPU work for fewer stored and transferred bytes. Encoding and compression are complementary rather than interchangeable.
+**Encoding algorithms in practice:**
+
+| Encoding | How it works | Good fit and limitation |
+| --- | --- | --- |
+| Run-length encoding (RLE) | Store a value and its consecutive repetition count: `A,A,A,B,B` → `(A,3),(B,2)` | Long runs of equal values; alternating values offer little benefit |
+| Dictionary encoding | Store distinct values once and replace occurrences with IDs: `paid,pending,paid` → dictionary `{0:paid,1:pending}` plus `0,1,0` | Repeated strings or categories; mostly unique values can make the dictionary expensive |
+| Delta encoding | Store an initial value and differences: `100,103,106,109` → `100` plus `3,3,3` | Sorted timestamps or nearby integers; large irregular jumps reduce the benefit |
+| Bit packing | Use only the bits needed for a known range: integers `0–7` need 3 bits each | Small nonnegative integers, dictionary IDs, or transformed deltas; outliers can widen a block's bit width |
+
+These are conceptual examples; each file format specifies its own binary layout and may combine techniques, such as delta encoding followed by bit packing. [Parquet encodings](https://parquet.apache.org/docs/file-format/data-pages/encodings/).
+
+**Compression** applies a codec to encoded data or blocks. It trades CPU work for fewer stored and transferred bytes. Encoding and compression are complementary rather than interchangeable. The codecs below are **lossless**: decompression reconstructs the original bytes exactly.
+
+**How compression algorithms work:**
+
+- **LZ77-style matching** replaces repeated byte sequences with a backward distance and a length, while keeping unmatched bytes as literals. Conceptually, `abcabcabc` can become literal `abc` followed by “copy 6 bytes from distance 3”; the decoder copies incrementally, so overlapping matches work. The compressor searches a bounded history window; a larger window can find more distant repetitions but needs more memory.
+- **Entropy coding** represents frequent symbols more cheaply than rare ones. Huffman coding builds a prefix code with shorter bit strings for more frequent symbols. Finite State Entropy (FSE), used by Zstandard, encodes symbols using a probability model and a carried state. A codec can first find repeated sequences and then entropy-code its literals and match instructions. [DEFLATE specification](https://www.rfc-editor.org/rfc/rfc1951), [Zstandard format](https://github.com/facebook/zstd/blob/dev/doc/zstd_compression_format.md).
+
+**Common codecs and compression formats:**
+
+| Codec / format | Algorithm and representation | Typical tradeoff |
+| --- | --- | --- |
+| Zstandard (`zstd`, standalone `.zst`) | LZ77-style matches with Huffman coding for literals and FSE for match-related symbols; frames contain blocks and decoding metadata | A candidate when both size and speed matter; compression levels trade write CPU for size, and optional trained dictionaries can help small similar records |
+| LZ4 (standalone `.lz4` frames) | Byte-oriented literals and LZ77-style matches without an entropy-coding stage; raw blocks and framed streams are distinct representations | Favors fast compression and decompression over maximum size reduction; useful when latency or CPU is the constraint |
+| Snappy | Byte-oriented literals and backward-copy instructions without an entropy-coding stage; raw compressed data and the separate framed stream format differ | Favors speed and simple decoding; a candidate for frequently read analytical data when supported by the engine |
+| gzip (`.gz`, usually DEFLATE) | gzip wraps compressed data with a header and a trailer containing CRC32 and original size modulo 2³²; DEFLATE combines LZ77-style matching and Huffman coding | Broad interoperability; compare its CPU cost and size against faster codecs for the actual workload |
+| Brotli (`.br`) | LZ77-style matching, Huffman coding, context modeling, and a built-in static dictionary | A candidate for text-heavy data; higher quality settings can make compression expensive |
+
+Algorithm and format references: [Zstandard](https://github.com/facebook/zstd), [LZ4 block format](https://github.com/lz4/lz4/blob/dev/doc/lz4_Block_format.md), [Snappy format](https://github.com/google/snappy/blob/main/format_description.txt), [gzip format](https://www.rfc-editor.org/rfc/rfc1952), [Brotli format](https://www.rfc-editor.org/rfc/rfc7932).
+
+**Codec vs. framing vs. data format:** A codec defines how bytes are compressed. Framing packages compressed blocks with boundaries and metadata, such as sizes, dictionary identifiers, or checksums, depending on the format. Parquet, ORC, and Avro organize records or columns and specify how compression is embedded. A Parquet file using Zstandard is still a Parquet file; it is not an entire Parquet file wrapped in `.zst`. LZ4 frames add metadata around raw LZ4 blocks; Parquet's deprecated `LZ4` codec uses a different framing scheme, so use `LZ4_RAW` when supported. [LZ4 frames](https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md), [Parquet compression definitions](https://parquet.apache.org/docs/file-format/data-pages/compression/).
+
+**Parallel reads and compatibility:** A single ordinary gzip stream cannot generally be decoded from an arbitrary byte offset without prior decoder state or an index. Independently compressed pages or blocks in a structured file can preserve parallel reading when the reader can locate and decode them. Splittability depends on the container, block dependencies, and reader support, not just the codec name. Verify codec and framing support in every consuming engine before changing writers.
 
 **Example:** A status column containing a few repeated strings can dictionary-encode well. Random unique identifiers may gain less and cause a writer to choose another encoding. Compare compressed size, decode cost, and end-to-end scan time; the smallest file is not necessarily the fastest to query.
 
@@ -286,8 +484,6 @@ Separate statistics used to choose a plan from metadata used to eliminate data s
 **Clustering** groups similar values physically within files or storage units. Sorting by customer can narrow min/max ranges and improve skipping for customer predicates, but exact clustering semantics vary by engine.
 
 **Compaction** merges or rewrites data to reduce small files, overlapping sorted runs, or obsolete versions. It consumes compute and I/O, and publication must preserve a consistent table view. Deletion of old files must respect active readers, retained snapshots, and recovery requirements.
-
-**Interview check:** For a lake with millions of small daily files, explain how compaction helps request and scheduling overhead, why it does not replace a good partition key, and when old files are safe to remove.
 
 ## 5. Performance Engineering
 
@@ -370,8 +566,6 @@ Use a controlled sequence:
 5. Check whether the bottleneck moved and whether the improvement survives repeated runs.
 
 Separate cold and warm caches, account for startup and autoscaling, and avoid reporting only the fastest run. A speedup caused by silently dropping late records is a correctness failure.
-
-**Interview check:** If a job's runtime stays flat after doubling workers, distinguish insufficient parallel work, skew, shared I/O saturation, and serial work using specific metrics.
 
 ## 6. Networking & Infrastructure
 
