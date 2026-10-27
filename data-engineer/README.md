@@ -37,6 +37,7 @@ Interview guides grouped by subject. Start with foundations, then follow the top
   - [Snowflake](cloud-and-platforms/snowflake.md)
 - **system-design/**
   - [Data platform system design](system-design/data-platform-system-design.md)
+  - [Data / Enterprise Architect](system-design/data-enterprise-architect.md)
   - [Cost engineering and FinOps](system-design/finops.md)
 - **ai/**
   - [AI data engineering](ai/ai.md)
@@ -61,6 +62,7 @@ Read shared concepts in the main guide below, then use product guides for implem
 | Catalogs, ownership, lineage concepts, access, privacy, retention, and audits | [Governance](quality-and-governance/governance.md) | Cloud and platform guides for enforcement |
 | Cost models, sizing economics, budgets, and cost attribution | [FinOps](system-design/finops.md) | Platform-specific resource and query costs |
 | Requirements, capacity estimates, component choices, and end-to-end failure handling | [System design](system-design/data-platform-system-design.md) | The worked design after recalling the component guides |
+| Enterprise frameworks, MDM, domain ownership, architecture evaluation, and technology strategy | [Data / Enterprise Architect](system-design/data-enterprise-architect.md) | Governance, data contracts, semantic modeling, system design, and FinOps |
 
 ## Recall flow before an interview
 
