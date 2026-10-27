@@ -487,13 +487,9 @@ Separate statistics used to choose a plan from metadata used to eliminate data s
 
 ## 5. Performance Engineering
 
-### Latency vs. throughput, percentiles (P95/P99)
+### Latency vs. throughput
 
 A pipeline can process more orders per second while making each order wait longer. Batching and concurrency often create exactly that trade-off. **Throughput** measures completed work per unit of time; **latency** measures the time for one operation across a boundary you define. Keep both in view, because a higher throughput number does not tell you whether a particular user or event received a faster response.
-
-**P95** is the latency at or below which approximately 95% of observations fall; **P99** similarly describes 99%. An average can hide a long tail affecting users or delaying a distributed stage. A request waiting for many parallel subrequests is exposed to the slowest required response.
-
-Do not average per-worker P99 values to obtain a global P99. Combine distributions or suitable histograms, and define the measurement window, population, and treatment of failures. A load generator that stops sending while blocked can hide queueing delays; report the offered load as well as completed throughput.
 
 **Example:** A pipeline processes 100,000 records per second but buffers for five minutes. It has high throughput and poor freshness; both metrics are needed.
 
@@ -707,55 +703,3 @@ Track **cost per successful unit of work**, such as cost per million validated e
 **Recovery** needs retained input, compatible schemas, deterministic or versioned transformation logic, and safe publication. Backfills should use the same identity and version rules as live processing. Validate staged results before an atomic cutover when supported; coordinate overlapping live changes rather than overwrite them blindly.
 
 **Interview check:** A day of revenue is wrong although every task succeeded. Explain how to locate the affected input range, correct the computation, replay safely, reconcile the result, and publish without double counting.
-
-## 8. Advanced Engineering Trade-offs
-
-### Consistency vs. latency vs. availability
-
-Imagine serving a customer from a nearby replica while the latest inventory update is still crossing a region boundary. The read is fast, but it may be stale. Waiting for coordination can give a stronger guarantee, at the cost of round trips and dependence on enough reachable replicas. This tension exists during normal operation as well as failures; CAP alone does not explain the everyday latency cost of cross-region coordination.
-
-Choose guarantees per operation. Inventory reservation may need a coordinated conditional change, while an approximate product-view counter can tolerate delayed convergence. State what a caller sees during failure and how conflicting updates are resolved.
-
-### Replication vs. partitioning
-
-Replication copies data; partitioning divides it. Replicas improve resilience or read capacity but consume storage, network, and write propagation work. Shards increase aggregate data and processing capacity but complicate cross-shard joins, transactions, and rebalancing.
-
-Most large systems need both: distribute orders across shards and replicate each shard. Adding replicas does not automatically increase write capacity when every write still passes through the same shard leader.
-
-### Throughput vs. resource efficiency
-
-More parallelism and spare capacity can improve peak throughput or tail latency while reducing average utilization. Packing workloads tightly can lower cost but increases contention and leaves little room for bursts, failover, or backlog recovery.
-
-Compare useful throughput per unit of cost while meeting latency and reliability objectives. A highly utilized cluster with unstable queues is not necessarily efficient, and idle failover capacity can be an intentional reliability expense.
-
-### Batch size vs. processing latency
-
-Larger batches amortize request, transaction, scheduling, and serialization overhead and can compress better. They increase buffering delay, peak memory, retry work, and the time before a result becomes visible.
-
-Use both a size limit and a time limit when the workload needs bounded waiting under low traffic. Measure from event creation to committed output; measuring only the time spent inside the batch hides the batching delay.
-
-### Indexing vs. write amplification
-
-Indexes accelerate selective reads but need maintenance on writes and consume space and cache. Covering indexes can avoid base-table reads while making index entries larger. An index unused by important queries still imposes a maintenance cost.
-
-**Write amplification** is physical data written relative to logical user data written. Index updates, WAL, LSM compaction, and replication all contribute work at different layers; define the measurement boundary. Add an index for a demonstrated access pattern and verify its effect on both reads and ingestion.
-
-### Compression vs. CPU utilization
-
-Compression can lower storage cost and network time while adding encode and decode CPU work. A stronger codec may help an I/O-bound scan but slow a CPU-bound pipeline. Repeatedly decompressing the same data can alter the balance again.
-
-Benchmark the actual data and read/write ratio. Use end-to-end throughput, latency, and cost alongside compression ratio. There is no universal best codec or compression level for every stage.
-
-### Precomputation vs. query-time computation
-
-Precomputed aggregates, indexes, and materialized views move work from reads to ingestion or refresh. They make recurring queries cheaper but add storage, maintenance, correction logic, and potential staleness. Historical changes can require revisiting already computed results.
-
-Query-time computation offers flexibility and fresh derivation at the cost of repeated scans and higher latency. Precompute common stable questions when their reuse justifies maintenance, and retain sufficient detail to answer new questions and repair old aggregates.
-
-### Managed services vs. self-hosted infrastructure
-
-Managed services reduce some provisioning, patching, and availability work. They can impose service limits, pricing constraints, network charges, reduced low-level control, or portability costs. Self-hosting offers more control while making upgrades, security, scaling, backup, and on-call expertise the team's responsibility.
-
-Compare total operating cost and demonstrated requirements rather than infrastructure price alone. A managed service still requires correct schemas, access rules, recovery objectives, monitoring, and client behavior. Self-hosting only pays when the needed control or economics justify that operational burden.
-
-**Interview check:** For every choice, name the workload, the required guarantee, the limiting resource, and the failure behavior. Then state which measurement or requirement would make you change the design.
