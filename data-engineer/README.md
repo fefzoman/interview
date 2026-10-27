@@ -20,6 +20,7 @@ Interview guides grouped by subject. Start with foundations, then follow the top
   - [Data warehousing and modeling](storage-and-modeling/dwh.md)
   - [Iceberg](storage-and-modeling/iceberg.md)
   - [ClickHouse](storage-and-modeling/clickhouse.md)
+  - [DuckDB](storage-and-modeling/duckdb.md)
   - [MongoDB](storage-and-modeling/mongodb.md)
   - [Semantic layer and metrics](storage-and-modeling/semantic-layer.md)
 - **pipelines/**
