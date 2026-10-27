@@ -15,6 +15,7 @@ A Python ingestion job often starts as a short script: fetch records, clean them
 9. [Packaging & Environments](#9-packaging--environments)
 10. [Python for Data Engineering](#10-python-for-data-engineering)
 11. [Production & Advanced Topics](#11-production--advanced-topics)
+12. [Python & Data Engineering Integration](#12-python--data-engineering-integration)
 
 ## 1. Language Fundamentals
 
@@ -1286,3 +1287,188 @@ After a fix, validate the original failure case and a representative normal run,
 8. **An async task is cancelled while a database write runs in a thread.** Cancellation of the await does not establish that the write stopped; determine the destination outcome before replay.
 9. **A backfill returns different output from the original run.** Check source snapshots, schema/code versions, reference data, time-dependent configuration, and deterministic interval definitions.
 10. **You are asked whether free-threaded Python replaces multiprocessing.** Compare dependency support, shared-state safety, isolation, memory, transfer overhead, and measured scaling for the specific workload.
+
+## 12. Python & Data Engineering Integration
+
+A pipeline may read data into pandas, transform it in Polars, join it with database records using SQL, and publish it to ClickHouse. Each boundary can introduce a copy, a type change, or a network transfer. The useful interview question is therefore where computation happens and which representation crosses each boundary. Section 6 compares the libraries; this section explains how to connect them without losing their performance or correctness guarantees.
+
+The three local Python examples were checked with DuckDB 2.0.0, pandas 3.1.0, Polars 2.1.0, and PyArrow 26.0.0. Remote SQL examples require the services and configuration described beside them; API names and connector behavior should be checked against the installed versions.
+
+### Pandas, Polars, and PyArrow interoperability
+
+These libraries can exchange tabular data, but their internal representations differ. Pandas columns can use NumPy storage, Python objects, or extension arrays, including Arrow-backed arrays. Polars uses columnar storage with Arrow interoperability. PyArrow provides explicit schemas, tables, and record batches that can bridge engines without first creating a Python dictionary for every row.
+
+| Direction | Common API | What to check |
+| --- | --- | --- |
+| pandas → PyArrow | `pa.Table.from_pandas(df, preserve_index=False)` | Index preservation, inferred types, object columns, and null handling |
+| PyArrow → pandas | `table.to_pandas(types_mapper=pd.ArrowDtype)` | Arrow-backed dtype support in later pandas operations |
+| PyArrow → Polars | `pl.from_arrow(table, rechunk=False)` | Type compatibility and whether chunk consolidation is needed |
+| Polars → PyArrow | `df.to_arrow()` | Some types require representation changes |
+| Polars → pandas | `df.to_pandas(use_pyarrow_extension_array=True)` | Preserves Arrow-backed nulls; later operations may convert to NumPy |
+
+This independent example requires pandas, Polars, and PyArrow. It preserves a nullable integer column across the conversions:
+
+```python
+import pandas as pd
+import polars as pl
+import pyarrow as pa
+
+orders = pd.DataFrame({
+    "order_id": pd.Series([1, 2, 3], dtype="int64[pyarrow]"),
+    "amount_cents": pd.Series([100, None, 300], dtype="int64[pyarrow]"),
+})
+table = pa.Table.from_pandas(orders, preserve_index=False)
+frame = pl.from_arrow(table, rechunk=False)
+restored = frame.to_pandas(use_pyarrow_extension_array=True)
+
+assert table.schema.field("amount_cents").type == pa.int64()
+assert frame["amount_cents"].to_list() == [100, None, 300]
+assert restored["amount_cents"].dtype == pd.ArrowDtype(pa.int64())
+assert restored["amount_cents"].isna().tolist() == [False, True, False]
+```
+
+Without an agreed schema, a nullable integer can become a floating-point column in a NumPy-backed conversion. That can lose precision for large identifiers. Decide whether an index is business data before dropping it, and verify decimal scale, timestamp units/timezones, categorical encodings, and nested fields. A round trip that preserves displayed values may still change their types or interpretation. [Arrow and pandas integration](https://arrow.apache.org/docs/python/pandas.html).
+
+Using Arrow-backed pandas columns allows compatible conversions to share buffers and preserve nulls. It does not guarantee that every subsequent pandas operation stays Arrow-backed: unsupported operations can trigger conversion. Likewise, avoiding rechunking removes one possible consolidation step but does not eliminate type conversions. [Polars to pandas](https://docs.pola.rs/api/python/stable/reference/dataframe/api/polars.DataFrame.to_pandas.html), [Polars from Arrow](https://docs.pola.rs/api/python/stable/reference/api/polars.from_arrow.html).
+
+### Zero-copy exchange and Arrow integration
+
+**Zero-copy** exchange means the consumer can reference existing data buffers instead of duplicating their contents. Arrow's columnar layout describes typed buffers, offsets, and null bitmaps so compatible consumers can interpret them consistently. The Arrow C Data and C Stream interfaces, exposed through Python interoperability protocols where supported, let libraries exchange arrays and batch streams within a process without Python row objects. [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html), [Arrow PyCapsule interface](https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html).
+
+Sharing buffers requires compatible types/layouts and valid ownership for as long as the consumer uses them. Casting, joining, sorting, decompression, or combining chunks can allocate new buffers. Sharing a small slice can also retain the much larger parent allocation, so zero-copy can reduce transfer cost while delaying memory release.
+
+Converting Arrow to ordinary NumPy-backed pandas has stricter conditions than keeping Arrow extension arrays: supported primitive types, no nulls, and a single chunk are important cases. Where available, a `zero_copy_only=True` conversion option makes a required copy fail rather than happen silently. Measure actual allocations when zero-copy is a requirement. [Arrow zero-copy limitations](https://arrow.apache.org/docs/python/pandas.html#memory-usage-and-zero-copy).
+
+An Arrow stream allows incremental consumption of record batches; an Arrow table represents the assembled result. Neither guarantees a bounded-memory query: an upstream global join or aggregation can retain substantial state. Arrow IPC serializes columnar data for transport or storage. Transferring that data over a network still involves transport, buffering, and decoding; an Arrow response from a database is not shared memory with the database server.
+
+### SQL on DataFrames and replacement scans
+
+DuckDB is an analytical database embedded in the Python process. It can query supported pandas, Polars, and Arrow objects without first inserting every row into a persistent database table. A **replacement scan** lets its Python integration resolve an otherwise unresolved SQL table name to a supported Python object visible at the query call site. SQL binds to that object's contents; it does not transform the object into a PostgreSQL table or run SQL inside pandas. [SQL on pandas](https://duckdb.org/docs/stable/guides/python/sql_on_pandas.html).
+
+This example requires DuckDB, pandas, and PyArrow. It demonstrates convenient name lookup and explicit registration of the same input:
+
+```python
+import duckdb
+import pandas as pd
+
+orders = pd.DataFrame({
+    "customer_id": [1, 1, 2],
+    "amount_cents": [100, 50, 300],
+})
+with duckdb.connect() as connection:
+    actual = connection.sql(
+        "SELECT customer_id, sum(amount_cents) "
+        "FROM orders GROUP BY customer_id ORDER BY customer_id"
+    ).fetchall()
+    assert actual == [(1, 150), (2, 300)]
+
+    connection.register("input_orders", orders)
+    table = connection.sql(
+        "SELECT * FROM input_orders ORDER BY customer_id, amount_cents"
+    ).to_arrow_table()
+    assert table.num_rows == 3
+    connection.unregister("input_orders")
+```
+
+Explicit registration gives reusable functions a deliberate connection-local name instead of depending on a caller's variable scope. A registered object is a query source, not a durable table; `CREATE TABLE ... AS SELECT ...` materializes data into DuckDB storage when that is needed. Keep inputs stable while queries consume them. The APIs and supported replacement objects depend on the installed DuckDB version. [Python data ingestion](https://duckdb.org/docs/stable/clients/python/data_ingestion.html).
+
+Choose the output boundary deliberately: a relation's `.df()` returns pandas, `.pl()` returns Polars, `.to_arrow_table()` assembles an Arrow table, and `.to_arrow_reader()` exposes batches in current DuckDB APIs. Older versions use names such as `fetch_arrow_table` and `fetch_record_batch`. Calling `fetchall()` on millions of rows constructs Python row objects and can undo much of the benefit of columnar processing. [DuckDB result conversion](https://duckdb.org/docs/stable/clients/python/conversion.html).
+
+Polars also supports SQL through its own SQL interfaces, with Polars executing the expressions. In DuckDB SQL over Polars, DuckDB coordinates the query. LazyFrame support does not mean every operation is pushed into Polars; supported pushdown and materialization behavior vary by version. Inspect the plan and memory use rather than assuming that two lazy APIs form one fully fused pipeline. [DuckDB and Polars](https://duckdb.org/docs/stable/guides/python/polars.html), [Polars SQL interface](https://docs.pola.rs/user-guide/sql/intro/).
+
+### ETL/ELT with `COPY` and `ATTACH`
+
+If a transformation already runs in an engine, returning every row to Python just to write a file adds avoidable conversion and memory use. DuckDB's `COPY (SELECT ...) TO ...` writes a query result directly to a supported format; `COPY table FROM ...` loads a supported input into an existing table. These statements handle bulk transfer, not deduplication or checkpoint coordination. [DuckDB COPY](https://duckdb.org/docs/stable/sql/statements/copy.html).
+
+`ATTACH` exposes another database under a catalog name in the current DuckDB connection. For a native DuckDB database it references that database's storage; an extension can expose a supported external system through the same catalog model. Attaching is not copying the source into the main database. `DETACH` removes the attachment without deleting its source data. [DuckDB ATTACH](https://duckdb.org/docs/stable/sql/statements/attach.html).
+
+This self-contained example requires DuckDB. It uses a separate in-memory staging catalog and a temporary output directory, so rerunning it does not overwrite a real dataset:
+
+```python
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import duckdb
+
+with TemporaryDirectory() as directory, duckdb.connect() as connection:
+    connection.execute("ATTACH ':memory:' AS staging")
+    connection.execute(
+        "CREATE TABLE staging.main.orders "
+        "(customer_id INTEGER, amount_cents BIGINT)"
+    )
+    connection.execute(
+        "INSERT INTO staging.main.orders VALUES (1, 100), (1, 50), (2, 300)"
+    )
+    output = str(Path(directory) / "totals.parquet")
+    connection.execute(
+        "COPY (SELECT customer_id, sum(amount_cents) AS total_cents "
+        "FROM staging.main.orders GROUP BY customer_id) "
+        "TO ? (FORMAT PARQUET)", [output]
+    )
+    actual = connection.execute(
+        "SELECT * FROM read_parquet(?) ORDER BY customer_id", [output]
+    ).fetchall()
+    assert actual == [(1, 150), (2, 300)]
+    connection.execute("DETACH staging")
+```
+
+In a real pipeline, validate the completed output before publishing it and advance progress only after publication succeeds. A file write does not share a transaction with a remote database checkpoint. Attached databases also do not provide a distributed atomic commit: DuckDB restricts writes in one transaction to one attached database. Independent source snapshots do not establish a single common snapshot across systems. [Attachment transaction semantics](https://duckdb.org/docs/stable/sql/statements/attach.html#transactional-semantics).
+
+For ETL, Python can coordinate extraction while DuckDB transforms and exports validated batches. For ELT into PostgreSQL or ClickHouse, bulk-load into staging and run the appropriate destination SQL there. These choices move computation and recovery boundaries; they do not change the need for the validation, replay, and checkpoint rules in sections 7 and 10.
+
+### PostgreSQL integration and federated queries
+
+For direct PostgreSQL access, use a PostgreSQL driver such as Psycopg. Its `cursor.copy("COPY ... FROM STDIN")` interface streams rows or blocks through the connection; `write_row` adapts Python row values, while block writing requires compatible preformatted input. The copy still follows transaction commit/rollback rules. A server-side `COPY ... FROM '/path'` refers to a file visible to the database server, whereas `FROM STDIN` receives data from the client. [Psycopg COPY](https://www.psycopg.org/psycopg3/docs/basic/copy.html), [PostgreSQL COPY](https://www.postgresql.org/docs/current/sql-copy.html).
+
+DuckDB's PostgreSQL extension provides another path: attach PostgreSQL and join its tables with local files or registered frames. The following SQL requires a permitted `postgres` extension installation, a configured libpq service named `analytics_readonly`, an accessible `public.customers` table, and a local `orders.parquet` file. The service supplies connection details and credentials outside the SQL text.
+
+```sql
+INSTALL postgres;
+LOAD postgres;
+ATTACH 'service=analytics_readonly' AS pg (TYPE postgres, READ_ONLY);
+
+SELECT c.region, sum(o.amount_cents) AS total_cents
+FROM read_parquet('orders.parquet') AS o
+JOIN pg.public.customers AS c ON o.customer_id = c.customer_id
+GROUP BY c.region;
+```
+
+This is a **federated query**: one query combines sources with different storage owners. DuckDB coordinates execution and reads the remote data needed by the plan. Supported pushdown can reduce transfer, but an attachment does not imply the full join executes in PostgreSQL. When work should explicitly run there, the extension's `postgres_query` can send a read query to PostgreSQL and return its result. Use restricted credentials and inspect both engines' behavior before scanning large operational tables. [DuckDB PostgreSQL extension](https://duckdb.org/docs/stable/core_extensions/postgres.html).
+
+### ClickHouse integration and choosing where a join runs
+
+ClickHouse usually executes on a separate server or cluster. With ClickHouse Connect, `query_df` returns pandas, `query_arrow` returns a PyArrow table, and `query_arrow_stream` exposes Arrow batches through a managed stream. Use a context manager around a stream so resources close on early termination. Push selective filtering and aggregation into ClickHouse before transferring results when those operations belong there. [ClickHouse Python querying](https://clickhouse.com/docs/integrations/language-clients/python/advanced-querying).
+
+For loading, `insert_df` accepts pandas, `insert_arrow` accepts a PyArrow table, and `insert_df_arrow` supports Arrow-backed pandas and Polars inputs in documented versions. Match destination types and nullability explicitly and batch writes. Arrow-based transport avoids some Python object conversion, but still serializes data across the client/server boundary. Retry safety depends on the table engine, deduplication configuration, and insert contract; Arrow does not provide exactly-once delivery. [ClickHouse Python inserting](https://clickhouse.com/docs/integrations/language-clients/python/advanced-inserting).
+
+A small ClickHouse query result can be fetched as Arrow and registered in DuckDB for a local join. That is a client-side transfer followed by local execution; DuckDB does not automatically push a later predicate back through the earlier client request. If the large fact table is in ClickHouse, doing the join there may avoid moving it into Python.
+
+ClickHouse can also query PostgreSQL through its `postgresql` table function. This illustrative query runs in ClickHouse and requires `analytics.orders`, a configured named collection `operational_pg`, and a remote `customers` table with compatible join keys:
+
+```sql
+SELECT c.region, sum(o.amount_cents) AS total_cents
+FROM analytics.orders AS o
+JOIN postgresql(operational_pg, table = 'customers') AS c
+    ON o.customer_id = c.customer_id
+GROUP BY c.region;
+```
+
+For the table-reading form, supported simple filters can run in PostgreSQL, while the surrounding joins and aggregations run in ClickHouse. Newer query-passing features have additional version requirements. This live query is not CDC or replication: it reads remote data at query time and depends on PostgreSQL availability and capacity. [ClickHouse PostgreSQL table function](https://clickhouse.com/docs/sql-reference/table-functions/postgresql).
+
+| Approach | Where the main computation runs | Good fit | Cost to assess |
+| --- | --- | --- | --- |
+| Driver query → pandas/Polars | Source SQL first, then Python-side engine | Small/medium results needing Python integration | Transfer, conversion, and local peak memory |
+| DuckDB over local frames/files | Embedded DuckDB | Local analytical joins and file transformations | Local CPU, memory, spill, and output size |
+| DuckDB with PostgreSQL attachment | DuckDB plus supported remote work | Joining selected remote records with local data | Remote scan size, pushdown, and source load |
+| ClickHouse with PostgreSQL table function | ClickHouse plus supported remote filters | Enriching ClickHouse facts with remote data | Remote reads, network, source consistency, and availability |
+| Replicate/load, then query destination | Destination engine after ingestion | Repeated analytics with controlled serving load | Freshness lag, storage, and pipeline maintenance |
+
+Before choosing federation, ask how often the query runs, how many bytes cross each boundary, which filters execute remotely, and whether the sources provide a sufficiently consistent view. For repeated heavy queries, loading a governed copy can provide a more predictable workload than repeatedly scanning the operational source.
+
+**Interview questions**
+
+- **Is conversion between pandas, Polars, and Arrow always zero-copy?** No. Storage types, nulls, chunks, casts, and the next operation determine whether buffers can be shared.
+- **Does a replacement scan import a DataFrame into a persistent table?** No. It resolves a query source to a Python object; explicit materialization is a separate operation.
+- **Why use `COPY` instead of fetching and inserting rows in Python?** It can keep bulk transformation and output inside the engine, reducing row-object conversion and transfer overhead.
+- **Does `ATTACH` make a PostgreSQL-to-file pipeline atomic?** No. Remote commits, file publication, and checkpoints retain separate durability boundaries.
+- **Where does a federated join run?** Identify the coordinator and connector capabilities, inspect the plan, and distinguish remote pushdown from local work.
+- **Why might federation be slower than loading first?** Repeated remote scans, weak pushdown, source contention, and network transfer can outweigh the storage saved.
