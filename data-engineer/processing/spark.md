@@ -1,9 +1,5 @@
 # Apache Spark: Data Engineer Interview Guide
 
-A Spark job that looks like a few DataFrame operations can send terabytes across a cluster. Another job may finish quickly until one unusually large customer leaves a single task running long after the rest. To explain either outcome, follow the work: where it runs, how data moves, what state it builds, and how it recovers. This guide uses that path to connect Spark's execution model to practical tuning decisions.
-
-**Reference versions:** Apache Spark 3.5.6 and 4.0.0. These are explicit documentation baselines, not a claim about the latest release. Examples use PySpark and assume an existing `SparkSession` named `spark`. Table names, paths, and Kafka endpoints are illustrative. Iceberg and Delta Lake require compatible connectors and catalog configuration; their features depend on the installed version. Sizing examples are estimates to validate with measurements.
-
 ## Contents
 
 1. [Architecture & Execution](#1-architecture--execution)
