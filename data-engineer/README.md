@@ -19,6 +19,7 @@ Interview guides grouped by subject. Start with foundations, then follow the top
 - **storage-and-modeling/**
   - [Data warehousing and modeling](storage-and-modeling/dwh.md)
   - [Iceberg](storage-and-modeling/iceberg.md)
+  - [Delta Lakehouse](storage-and-modeling/delta-lakehouse.md)
   - [ClickHouse](storage-and-modeling/clickhouse.md)
   - [DuckDB](storage-and-modeling/duckdb.md)
   - [MongoDB](storage-and-modeling/mongodb.md)
